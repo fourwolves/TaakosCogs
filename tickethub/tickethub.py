@@ -435,13 +435,22 @@ class TicketReopenReasonModal(discord.ui.Modal):
         self.ticket_id = ticket_id
         self.requester_id = requester_id
         self.reason = discord.ui.TextInput(
-            label="Reason for reopening",
+            label=None if MODAL_SELECTS_SUPPORTED else "Reason for reopening",
             style=discord.TextStyle.paragraph,
             placeholder="Why should this ticket be reopened?",
             required=False,
             max_length=1000,
         )
-        self.add_item(self.reason)
+        if MODAL_SELECTS_SUPPORTED:
+            self.add_item(
+                discord.ui.Label(
+                    text="Reason for reopening",
+                    description="Provide an optional reason for reopening this ticket.",
+                    component=self.reason,
+                )
+            )
+        else:
+            self.add_item(self.reason)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if (
@@ -489,13 +498,22 @@ class TicketCloseReasonModal(discord.ui.Modal):
         self.ticket_id = ticket_id
         self.requester_id = requester_id
         self.reason = discord.ui.TextInput(
-            label="Reason for closing",
+            label=None if MODAL_SELECTS_SUPPORTED else "Reason for closing",
             style=discord.TextStyle.paragraph,
             placeholder="Why should this ticket be closed?",
             required=False,
             max_length=1000,
         )
-        self.add_item(self.reason)
+        if MODAL_SELECTS_SUPPORTED:
+            self.add_item(
+                discord.ui.Label(
+                    text="Reason for closing",
+                    description="Provide an optional reason for closing this ticket.",
+                    component=self.reason,
+                )
+            )
+        else:
+            self.add_item(self.reason)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if interaction.user.id != self.requester_id:
@@ -673,30 +691,124 @@ class TicketOpenModal(discord.ui.Modal):
             display_label = display_label[:45]
             question_type = str(field.get("type") or "text")
             required = bool(field.get("required", True))
+            description = str(field.get("description") or "")[:100] or None
+            min_values = field.get("min_values")
+            max_values = field.get("max_values")
             component: discord.ui.Item
+
+            if MODAL_SELECTS_SUPPORTED and question_type == "text_display" and hasattr(discord.ui, "TextDisplay"):
+                content = str(field.get("default") or field.get("placeholder") or field.get("description") or label)[:4000]
+                component = discord.ui.TextDisplay(content)
+                self.add_item(component)
+                self.inputs.append((label, component))
+                continue
+
             if MODAL_SELECTS_SUPPORTED and question_type == "choice":
+                default_choice = str(field.get("default") or "").strip().lower()
                 component = discord.ui.Select(
                     placeholder=str(field.get("placeholder") or "Choose an option")[:100],
                     options=[
                         discord.SelectOption(
                             label=str(choice)[:100],
                             value=str(choice)[:100],
+                            default=(str(choice).strip().lower() == default_choice),
                         )
                         for choice in field.get("choices", [])[:25]
                     ],
-                    min_values=1 if required else 0,
-                    max_values=1,
+                    min_values=min_values if min_values is not None else (1 if required else 0),
+                    max_values=max_values if max_values is not None else 1,
                     required=required,
                 )
             elif MODAL_SELECTS_SUPPORTED and question_type == "boolean":
+                default_val = str(field.get("default") or "").strip().lower()
                 component = discord.ui.Select(
                     placeholder="Choose Yes or No",
                     options=[
-                        discord.SelectOption(label="Yes", value="Yes"),
-                        discord.SelectOption(label="No", value="No"),
+                        discord.SelectOption(
+                            label="Yes",
+                            value="Yes",
+                            default=(default_val in {"yes", "y", "true", "1"}),
+                        ),
+                        discord.SelectOption(
+                            label="No",
+                            value="No",
+                            default=(default_val in {"no", "n", "false", "0"}),
+                        ),
                     ],
-                    min_values=1 if required else 0,
-                    max_values=1,
+                    min_values=min_values if min_values is not None else (1 if required else 0),
+                    max_values=max_values if max_values is not None else 1,
+                    required=required,
+                )
+            elif MODAL_SELECTS_SUPPORTED and question_type == "checkbox" and hasattr(discord.ui, "Checkbox"):
+                default_val = str(field.get("default") or "").strip().lower()
+                default_bool = default_val in {"yes", "y", "true", "1", "on", "checked"} if default_val else False
+                component = discord.ui.Checkbox(default=default_bool)
+            elif MODAL_SELECTS_SUPPORTED and question_type == "checkbox_group" and hasattr(discord.ui, "CheckboxGroup"):
+                raw_default = [d.strip().lower() for d in str(field.get("default") or "").split(",") if d.strip()]
+                options = [
+                    discord.CheckboxGroupOption(
+                        label=str(choice)[:100],
+                        value=str(choice)[:100],
+                        default=(str(choice).strip().lower() in raw_default),
+                    )
+                    for choice in field.get("choices", [])[:10]
+                ]
+                min_v = min_values if min_values is not None else (1 if required else 0)
+                max_v = max_values if max_values is not None else len(options)
+                component = discord.ui.CheckboxGroup(
+                    options=options,
+                    required=required,
+                    min_values=min_v,
+                    max_values=max_v,
+                )
+            elif MODAL_SELECTS_SUPPORTED and question_type == "radio" and hasattr(discord.ui, "RadioGroup"):
+                default_choice = str(field.get("default") or "").strip().lower()
+                options = [
+                    discord.RadioGroupOption(
+                        label=str(choice)[:100],
+                        value=str(choice)[:100],
+                        default=(str(choice).strip().lower() == default_choice),
+                    )
+                    for choice in field.get("choices", [])[:10]
+                ]
+                component = discord.ui.RadioGroup(
+                    options=options,
+                    required=required,
+                )
+            elif MODAL_SELECTS_SUPPORTED and question_type == "user" and hasattr(discord.ui, "UserSelect"):
+                component = discord.ui.UserSelect(
+                    placeholder=str(field.get("placeholder") or "Choose a member")[:100],
+                    min_values=min_values if min_values is not None else (1 if required else 0),
+                    max_values=max_values if max_values is not None else 1,
+                    required=required,
+                )
+            elif MODAL_SELECTS_SUPPORTED and question_type == "role" and hasattr(discord.ui, "RoleSelect"):
+                component = discord.ui.RoleSelect(
+                    placeholder=str(field.get("placeholder") or "Choose a role")[:100],
+                    min_values=min_values if min_values is not None else (1 if required else 0),
+                    max_values=max_values if max_values is not None else 1,
+                    required=required,
+                )
+            elif MODAL_SELECTS_SUPPORTED and question_type == "mentionable" and hasattr(discord.ui, "MentionableSelect"):
+                component = discord.ui.MentionableSelect(
+                    placeholder=str(field.get("placeholder") or "Choose a member or role")[:100],
+                    min_values=min_values if min_values is not None else (1 if required else 0),
+                    max_values=max_values if max_values is not None else 1,
+                    required=required,
+                )
+            elif MODAL_SELECTS_SUPPORTED and question_type == "channel" and hasattr(discord.ui, "ChannelSelect"):
+                component = discord.ui.ChannelSelect(
+                    placeholder=str(field.get("placeholder") or "Choose a channel")[:100],
+                    min_values=min_values if min_values is not None else (1 if required else 0),
+                    max_values=max_values if max_values is not None else 1,
+                    required=required,
+                )
+            elif MODAL_SELECTS_SUPPORTED and question_type == "file" and hasattr(discord.ui, "FileUpload"):
+                min_v = min_values if min_values is not None else (1 if required else 0)
+                max_v = max_values if max_values is not None else 1
+                component = discord.ui.FileUpload(
+                    min_values=min_v,
+                    max_values=max_v,
                     required=required,
                 )
             else:
@@ -720,6 +832,7 @@ class TicketOpenModal(discord.ui.Modal):
                 self.add_item(
                     discord.ui.Label(
                         text=display_label,
+                        description=description,
                         component=component,
                     ),
                 )
@@ -728,9 +841,52 @@ class TicketOpenModal(discord.ui.Modal):
             self.inputs.append((label, component))
 
     @staticmethod
-    def _input_value(component: discord.ui.Item) -> str:
+    def _format_mention(item: Any, prefix: str = "@") -> str:
+        if item is None:
+            return ""
+        if isinstance(item, (int, str)):
+            raw = str(item).strip()
+            if raw.isdigit():
+                return f"<{prefix}{raw}>"
+            return raw
+        item_id = getattr(item, "id", None)
+        if item_id is not None:
+            return f"<{prefix}{item_id}>"
+        return str(item)
+
+    @classmethod
+    def _input_value(cls, component: discord.ui.Item) -> str:
+        if hasattr(discord.ui, "TextDisplay") and isinstance(component, discord.ui.TextDisplay):
+            return ""
+        if hasattr(discord.ui, "Checkbox") and isinstance(component, discord.ui.Checkbox):
+            return "Yes" if getattr(component, "value", False) else "No"
+        if hasattr(discord.ui, "RadioGroup") and isinstance(component, discord.ui.RadioGroup):
+            return str(getattr(component, "value", "") or "").strip()
+        if hasattr(discord.ui, "FileUpload") and isinstance(component, discord.ui.FileUpload):
+            links = []
+            for att in getattr(component, "values", []) or []:
+                filename = getattr(att, "filename", "file")
+                url = getattr(att, "url", "")
+                links.append(f"[{filename}]({url})" if url else str(filename))
+            return "\n".join(links)
+        if hasattr(discord.ui, "UserSelect") and isinstance(component, discord.ui.UserSelect):
+            return " ".join(cls._format_mention(v, "@") for v in (getattr(component, "values", []) or []) if v)
+        if hasattr(discord.ui, "RoleSelect") and isinstance(component, discord.ui.RoleSelect):
+            return " ".join(cls._format_mention(v, "@&") for v in (getattr(component, "values", []) or []) if v)
+        if hasattr(discord.ui, "MentionableSelect") and isinstance(component, discord.ui.MentionableSelect):
+            mentions = []
+            for v in getattr(component, "values", []) or []:
+                if isinstance(v, discord.Role):
+                    mentions.append(cls._format_mention(v, "@&"))
+                else:
+                    mentions.append(cls._format_mention(v, "@"))
+            return " ".join(mentions)
+        if hasattr(discord.ui, "ChannelSelect") and isinstance(component, discord.ui.ChannelSelect):
+            return " ".join(cls._format_mention(v, "#") for v in (getattr(component, "values", []) or []) if v)
         if isinstance(component, discord.ui.Select):
-            return str(component.values[0]).strip() if component.values else ""
+            return ", ".join(str(v).strip() for v in (component.values or []) if str(v).strip())
+        if hasattr(component, "values"):
+            return ", ".join(str(v).strip() for v in (getattr(component, "values", []) or []) if str(v).strip())
         return str(getattr(component, "value", "") or "").strip()
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -813,8 +969,9 @@ class TicketQuestionTextModal(discord.ui.Modal):
         style = discord.TextStyle.short if style_value == discord.TextStyle.short.value else discord.TextStyle.paragraph
         default = field.get("default")
         placeholder = field.get("placeholder")
+        description = str(field.get("description") or "")[:100] or None
         self.answer = discord.ui.TextInput(
-            label=label,
+            label=None if MODAL_SELECTS_SUPPORTED else label,
             style=style,
             required=bool(field.get("required", True)),
             default=str(default)[:4000] if default not in (None, "") else None,
@@ -822,7 +979,16 @@ class TicketQuestionTextModal(discord.ui.Modal):
             min_length=field.get("min_length"),
             max_length=field.get("max_length"),
         )
-        self.add_item(self.answer)
+        if MODAL_SELECTS_SUPPORTED:
+            self.add_item(
+                discord.ui.Label(
+                    text=label,
+                    description=description,
+                    component=self.answer,
+                )
+            )
+        else:
+            self.add_item(self.answer)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await self.questionnaire.record_answer(
@@ -862,18 +1028,25 @@ class TicketQuestionnaireView(discord.ui.View):
     def question_embed(self) -> discord.Embed:
         field = self.current_field
         question_type = str(field.get("type") or "text")
-        description = str(field.get("label") or "Question")
-        if question_type == "choice":
+        description_parts = [str(field.get("label") or "Question")]
+        if field.get("description"):
+            description_parts.append(f"*{field['description']}*")
+        if question_type == "text_display":
+            content = str(
+                field.get("default") or field.get("placeholder") or field.get("description") or field.get("label") or ""
+            )
+            description_parts.append(content)
+        elif question_type in {"choice", "radio", "checkbox_group"}:
             choices = "\n".join(f"- {choice}" for choice in field.get("choices", []))
             if choices:
-                description = f"{description}\n\n{choices}"
+                description_parts.append(choices)
         embed = discord.Embed(
             title=f"Open Ticket - Question {self.field_index + 1}/{len(self.fields)}",
-            description=description,
+            description="\n\n".join(part for part in description_parts if part),
             color=discord.Color(TicketHub.DEFAULT_COLOR),
         )
-        required = "Required" if field.get("required", True) else "Optional"
-        embed.set_footer(text=f"{required} {question_type} question")
+        required = "Notice" if question_type == "text_display" else ("Required" if field.get("required", True) else "Optional")
+        embed.set_footer(text=f"{required} {question_type.replace('_', ' ')} question")
         return embed
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -890,7 +1063,10 @@ class TicketQuestionnaireView(discord.ui.View):
         field = self.current_field
         question_type = str(field.get("type") or "text")
 
-        if question_type == "choice":
+        if question_type in {"choice", "radio", "checkbox_group"}:
+            choices = field.get("choices", [])[:25]
+            max_v = field.get("max_values") if question_type == "checkbox_group" else 1
+            min_v = field.get("min_values") if question_type == "checkbox_group" else (1 if field.get("required", True) else 0)
             select = discord.ui.Select(
                 placeholder=str(field.get("placeholder") or "Choose an option")[:100],
                 options=[
@@ -898,20 +1074,64 @@ class TicketQuestionnaireView(discord.ui.View):
                         label=str(choice)[:100],
                         value=str(choice)[:100],
                     )
-                    for choice in field.get("choices", [])[:25]
+                    for choice in choices
                 ],
-                min_values=1,
-                max_values=1,
+                min_values=min_v if min_v is not None else (1 if field.get("required", True) else 0),
+                max_values=max_v if max_v is not None else 1,
             )
             select.callback = self._choice_callback
             self.add_item(select)
-        elif question_type == "boolean":
+        elif question_type in {"boolean", "checkbox"}:
             yes = discord.ui.Button(label="Yes", style=discord.ButtonStyle.success)
             yes.callback = self._yes_callback
             self.add_item(yes)
             no = discord.ui.Button(label="No", style=discord.ButtonStyle.danger)
             no.callback = self._no_callback
             self.add_item(no)
+        elif question_type == "user" and hasattr(discord.ui, "UserSelect"):
+            min_v = field.get("min_values") if field.get("min_values") is not None else (1 if field.get("required", True) else 0)
+            max_v = field.get("max_values") if field.get("max_values") is not None else 1
+            user_select = discord.ui.UserSelect(
+                placeholder=str(field.get("placeholder") or "Choose a member")[:100],
+                min_values=min_v,
+                max_values=max_v,
+            )
+            user_select.callback = self._select_values_callback
+            self.add_item(user_select)
+        elif question_type == "role" and hasattr(discord.ui, "RoleSelect"):
+            min_v = field.get("min_values") if field.get("min_values") is not None else (1 if field.get("required", True) else 0)
+            max_v = field.get("max_values") if field.get("max_values") is not None else 1
+            role_select = discord.ui.RoleSelect(
+                placeholder=str(field.get("placeholder") or "Choose a role")[:100],
+                min_values=min_v,
+                max_values=max_v,
+            )
+            role_select.callback = self._select_values_callback
+            self.add_item(role_select)
+        elif question_type == "mentionable" and hasattr(discord.ui, "MentionableSelect"):
+            min_v = field.get("min_values") if field.get("min_values") is not None else (1 if field.get("required", True) else 0)
+            max_v = field.get("max_values") if field.get("max_values") is not None else 1
+            ment_select = discord.ui.MentionableSelect(
+                placeholder=str(field.get("placeholder") or "Choose a member or role")[:100],
+                min_values=min_v,
+                max_values=max_v,
+            )
+            ment_select.callback = self._select_values_callback
+            self.add_item(ment_select)
+        elif question_type == "channel" and hasattr(discord.ui, "ChannelSelect"):
+            min_v = field.get("min_values") if field.get("min_values") is not None else (1 if field.get("required", True) else 0)
+            max_v = field.get("max_values") if field.get("max_values") is not None else 1
+            chan_select = discord.ui.ChannelSelect(
+                placeholder=str(field.get("placeholder") or "Choose a channel")[:100],
+                min_values=min_v,
+                max_values=max_v,
+            )
+            chan_select.callback = self._select_values_callback
+            self.add_item(chan_select)
+        elif question_type == "text_display":
+            cont = discord.ui.Button(label="Continue", style=discord.ButtonStyle.primary)
+            cont.callback = self._continue_callback
+            self.add_item(cont)
         else:
             answer = discord.ui.Button(
                 label="Answer",
@@ -920,7 +1140,7 @@ class TicketQuestionnaireView(discord.ui.View):
             answer.callback = self._text_callback
             self.add_item(answer)
 
-        if not field.get("required", True):
+        if not field.get("required", True) and question_type != "text_display":
             skip = discord.ui.Button(label="Skip", style=discord.ButtonStyle.secondary)
             skip.callback = self._skip_callback
             self.add_item(skip)
@@ -942,7 +1162,24 @@ class TicketQuestionnaireView(discord.ui.View):
                 ephemeral=True,
             )
             return
-        await self.record_answer(interaction, self.field_index, str(values[0]))
+        await self.record_answer(interaction, self.field_index, ", ".join(str(v) for v in values))
+
+    async def _select_values_callback(self, interaction: discord.Interaction) -> None:
+        values = (interaction.data or {}).get("values") or []
+        if not values:
+            await interaction.response.send_message(
+                "Choose an option before continuing.",
+                ephemeral=True,
+            )
+            return
+        field = self.current_field
+        question_type = str(field.get("type") or "text")
+        prefix = "#" if question_type == "channel" else "@&" if question_type == "role" else "@"
+        formatted = " ".join(self.cog._format_mention(v, prefix) for v in values)
+        await self.record_answer(interaction, self.field_index, formatted)
+
+    async def _continue_callback(self, interaction: discord.Interaction) -> None:
+        await self.record_answer(interaction, self.field_index, "")
 
     async def _yes_callback(self, interaction: discord.Interaction) -> None:
         await self.record_answer(interaction, self.field_index, "Yes")
@@ -1553,20 +1790,56 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
 
     @classmethod
     def _modal_type_name(cls, value: Any) -> str | None:
-        cleaned = cls._clean_modal_text(value, 20).lower()
+        cleaned = cls._clean_modal_text(value, 25).lower()
         aliases = {
             "": "text",
             "text": "text",
             "short": "text",
             "paragraph": "text",
+            "string": "text",
+            "text_display": "text_display",
+            "textdisplay": "text_display",
+            "display": "text_display",
+            "info": "text_display",
+            "notice": "text_display",
             "choice": "choice",
             "choices": "choice",
             "dropdown": "choice",
             "select": "choice",
+            "string_select": "choice",
             "boolean": "boolean",
             "bool": "boolean",
             "yesno": "boolean",
             "yes/no": "boolean",
+            "checkbox": "checkbox",
+            "check": "checkbox",
+            "toggle": "checkbox",
+            "checkbox_group": "checkbox_group",
+            "checkboxgroup": "checkbox_group",
+            "checkboxes": "checkbox_group",
+            "multi_choice": "checkbox_group",
+            "radio": "radio",
+            "radios": "radio",
+            "radio_group": "radio",
+            "radiogroup": "radio",
+            "user": "user",
+            "user_select": "user",
+            "userselect": "user",
+            "member": "user",
+            "role": "role",
+            "role_select": "role",
+            "roleselect": "role",
+            "mentionable": "mentionable",
+            "mentionable_select": "mentionable",
+            "mentionableselect": "mentionable",
+            "channel": "channel",
+            "channel_select": "channel",
+            "channelselect": "channel",
+            "file": "file",
+            "file_upload": "file",
+            "fileupload": "file",
+            "upload": "file",
+            "attachment": "file",
         }
         return aliases.get(cleaned)
 
@@ -1598,11 +1871,16 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
             label = cls._clean_modal_text(raw_field.get("label"), 45)
             if not label:
                 continue
+            description = cls._clean_modal_text(raw_field.get("description"), 100) or None
             question_type = cls._modal_type_name(raw_field.get("type")) or "text"
             choices = cls._clean_modal_choices(raw_field.get("choices"))
-            if question_type == "choice" and len(choices) < 2:
+            if (question_type in {"choice", "radio"} and len(choices) < 2) or (
+                question_type == "checkbox_group" and len(choices) < 1
+            ):
                 question_type = "text"
                 choices = []
+            elif question_type in {"radio", "checkbox_group"}:
+                choices = choices[:10]
             style = (
                 cls._clean_modal_int(
                     raw_field.get("style"),
@@ -1624,14 +1902,28 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
             )
             if min_length is not None and max_length is not None and min_length > max_length:
                 min_length = None
+            min_values = cls._clean_modal_int(
+                raw_field.get("min_values"),
+                minimum=0,
+                maximum=25,
+            )
+            max_values = cls._clean_modal_int(
+                raw_field.get("max_values"),
+                minimum=1,
+                maximum=25,
+            )
+            if min_values is not None and max_values is not None and min_values > max_values:
+                min_values = None
             fields.append(
                 {
                     "label": label,
+                    "description": description,
                     "type": question_type,
                     "style": style,
-                    "required": cls._clean_modal_bool(
-                        raw_field.get("required"),
-                        default=True,
+                    "required": (
+                        False
+                        if question_type == "text_display"
+                        else cls._clean_modal_bool(raw_field.get("required"), default=True)
                     ),
                     "default": cls._clean_modal_text(raw_field.get("default"), 4000),
                     "placeholder": cls._clean_modal_text(
@@ -1640,6 +1932,8 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
                     ),
                     "min_length": min_length,
                     "max_length": max_length,
+                    "min_values": min_values,
+                    "max_values": max_values,
                     "choices": choices,
                 },
             )
@@ -5768,10 +6062,31 @@ search.addEventListener('input', () => {{
                 details = f"choice, {required}, options: {choices}"
             elif question_type == "boolean":
                 details = f"boolean, {required}"
+            elif question_type == "checkbox":
+                default = "checked" if cls._clean_modal_bool(field.get("default"), default=False) else "unchecked"
+                details = f"checkbox, default: {default}"
+            elif question_type == "radio":
+                choices = ", ".join(cls._clean_modal_choices(field.get("choices")))
+                details = f"radio, {required}, options: {choices}"
+            elif question_type == "checkbox_group":
+                choices = ", ".join(cls._clean_modal_choices(field.get("choices")))
+                details = f"checkbox_group, {required}, options: {choices}"
+            elif question_type in {"user", "role", "mentionable", "channel"}:
+                details = f"{question_type} select, {required}, placeholder: {placeholder}"
+            elif question_type == "file":
+                min_v = (
+                    field.get("min_values") if field.get("min_values") is not None else (1 if field.get("required", True) else 0)
+                )
+                max_v = field.get("max_values") if field.get("max_values") is not None else 1
+                details = f"file upload, {required}, files: {min_v}-{max_v}"
+            elif question_type == "text_display":
+                details = "text display"
             else:
                 style = cls._modal_style_name(field.get("style"))
                 details = f"text/{style}, {required}, placeholder: {placeholder}"
-            lines.append(f"{index}. {label} ({details})")
+            desc = field.get("description")
+            desc_text = f" - '{desc}'" if desc else ""
+            lines.append(f"{index}. {label}{desc_text} ({details})")
         return lines
 
     async def _send_modal_settings(
@@ -5833,7 +6148,10 @@ search.addEventListener('input', () => {{
             question_type = self._modal_type_name(answer)
             if question_type is not None:
                 return question_type
-            await ctx.send("Reply with `text`, `choice`, or `boolean`.")
+            await ctx.send(
+                "Reply with `text`, `text_display`, `choice`, `radio`, `checkbox`, `checkbox_group`, "
+                "`boolean`, `user`, `role`, `mentionable`, `channel`, or `file`.",
+            )
 
     async def _prompt_modal_choices(
         self,
@@ -6821,17 +7139,28 @@ search.addEventListener('input', () => {{
                     ctx,
                     f"Question {index}/{count}: What should the label be?",
                 )
+                description = await self._prompt_optional_modal_text(
+                    ctx,
+                    f"Question {index}/{count}: Optional Label description? Reply `none` to skip.",
+                    limit=100,
+                )
                 question_type = await self._prompt_modal_type(
                     ctx,
-                    f"Question {index}/{count}: Should this be `text`, `choice`, or `boolean`?",
+                    f"Question {index}/{count}: Question type? (text, text_display, choice, radio, "
+                    "checkbox, checkbox_group, boolean, user, role, mentionable, channel, file)",
                 )
-                required = await self._prompt_modal_bool(
-                    ctx,
-                    f"Question {index}/{count}: Should this be required? Reply `yes` or `no`.",
-                )
+                required = True
+                if question_type != "text_display":
+                    required = await self._prompt_modal_bool(
+                        ctx,
+                        f"Question {index}/{count}: Should this be required? Reply `yes` or `no`.",
+                    )
                 style = discord.TextStyle.paragraph.value
                 placeholder = ""
+                default = ""
                 choices: list[str] = []
+                min_values = None
+                max_values = None
                 if question_type == "text":
                     style = await self._prompt_modal_style(
                         ctx,
@@ -6842,21 +7171,53 @@ search.addEventListener('input', () => {{
                         f"Question {index}/{count}: Placeholder text? Reply `none` to skip.",
                         limit=100,
                     )
-                elif question_type == "choice":
+                    default = await self._prompt_optional_modal_text(
+                        ctx,
+                        f"Question {index}/{count}: Default text? Reply `none` to skip.",
+                        limit=4000,
+                    )
+                elif question_type == "text_display":
+                    default = await self._prompt_optional_modal_text(
+                        ctx,
+                        f"Question {index}/{count}: Display text/guidelines content?",
+                        limit=4000,
+                    )
+                elif question_type in {"choice", "radio", "checkbox_group"}:
                     choices = await self._prompt_modal_choices(
                         ctx,
                         f"Question {index}/{count}: Enter comma-separated choices.",
                     )
+                    if question_type in {"radio", "checkbox_group"}:
+                        choices = choices[:10]
+                elif question_type == "checkbox":
+                    default_bool = await self._prompt_modal_bool(
+                        ctx,
+                        f"Question {index}/{count}: Should the checkbox be checked by default? Reply `yes` or `no`.",
+                    )
+                    default = "yes" if default_bool else "no"
+                elif question_type == "file":
+                    max_v_str = await self._prompt_optional_modal_text(
+                        ctx,
+                        f"Question {index}/{count}: Maximum files allowed (1-10)? Reply `none` for 1.",
+                        limit=2,
+                    )
+                    try:
+                        max_values = max(1, min(10, int(max_v_str))) if max_v_str else 1
+                    except ValueError:
+                        max_values = 1
                 fields.append(
                     {
                         "label": label,
+                        "description": description or None,
                         "type": question_type,
                         "style": style,
                         "required": required,
-                        "default": "",
+                        "default": default,
                         "placeholder": placeholder,
                         "min_length": None,
                         "max_length": None,
+                        "min_values": min_values,
+                        "max_values": max_values,
                         "choices": choices,
                     },
                 )
@@ -6881,24 +7242,30 @@ search.addEventListener('input', () => {{
         *,
         label: str = "",
     ) -> None:
-        """Add a text, choice, or boolean question to a profile form."""
+        """Add a modal question to a profile form."""
         assert ctx.guild is not None
         normalized_type = self._modal_type_name(question_type)
         if normalized_type is None:
             label = f"{question_type} {label}".strip()
             normalized_type = "text"
         choices: list[str] = []
-        if normalized_type == "choice":
+        if normalized_type in {"choice", "radio", "checkbox_group"}:
             if "|" not in label:
                 await ctx.send(
-                    "Choice questions must use `Question label | choice one, choice two`.",
+                    f"{normalized_type.replace('_', ' ').title()} questions must use `Question label | choice one, choice two`.",
                 )
                 return
             label, raw_choices = (part.strip() for part in label.split("|", 1))
             choices = self._clean_modal_choices(raw_choices)
-            if len(choices) < 2:
-                await ctx.send("Choice questions need between 2 and 25 choices.")
+            if normalized_type == "checkbox_group" and len(choices) < 1:
+                await ctx.send("Checkbox group questions need between 1 and 10 choices.")
                 return
+            if normalized_type in {"choice", "radio"} and len(choices) < 2:
+                limit = 10 if normalized_type == "radio" else 25
+                await ctx.send(f"{normalized_type.capitalize()} questions need between 2 and {limit} choices.")
+                return
+            if normalized_type in {"radio", "checkbox_group"}:
+                choices = choices[:10]
         label = label.strip()
         if not 1 <= len(label) <= 45:
             await ctx.send("Question labels must be between 1 and 45 characters.")
@@ -6911,13 +7278,16 @@ search.addEventListener('input', () => {{
         fields.append(
             {
                 "label": label,
+                "description": None,
                 "type": normalized_type,
                 "style": discord.TextStyle.paragraph.value,
-                "required": True,
+                "required": normalized_type != "text_display",
                 "default": "",
                 "placeholder": "",
                 "min_length": None,
                 "max_length": None,
+                "min_values": None,
+                "max_values": None,
                 "choices": choices,
             },
         )

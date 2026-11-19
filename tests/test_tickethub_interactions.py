@@ -6,11 +6,18 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
+import discord
 import pytest
 from redbot.core import commands
 
 from tickethub.alternative_interactions import CHOICE_EMOJIS, CONTROL_REACTIONS
-from tickethub.tickethub import TicketHub
+from tickethub.tickethub import (
+    MODAL_SELECTS_SUPPORTED,
+    TicketCloseReasonModal,
+    TicketHub,
+    TicketOpenModal,
+    TicketReopenReasonModal,
+)
 
 
 def cog():
@@ -326,5 +333,278 @@ def test_close_service_preserves_scheduled_timeout_and_rejects_untrusted_actor()
             guild, 7, actor, confirmed=True, expected_expires_at=50, permission_checked=True
         )
         instance._close_ticket.assert_awaited_once()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "raw_type,expected",
+    [
+        ("text", "text"),
+        ("string", "text"),
+        ("short", "text"),
+        ("paragraph", "text"),
+        ("text_display", "text_display"),
+        ("textdisplay", "text_display"),
+        ("display", "text_display"),
+        ("info", "text_display"),
+        ("notice", "text_display"),
+        ("choice", "choice"),
+        ("dropdown", "choice"),
+        ("select", "choice"),
+        ("string_select", "choice"),
+        ("boolean", "boolean"),
+        ("bool", "boolean"),
+        ("yesno", "boolean"),
+        ("checkbox", "checkbox"),
+        ("check", "checkbox"),
+        ("toggle", "checkbox"),
+        ("checkbox_group", "checkbox_group"),
+        ("checkboxgroup", "checkbox_group"),
+        ("multi_choice", "checkbox_group"),
+        ("radio", "radio"),
+        ("radio_group", "radio"),
+        ("radiogroup", "radio"),
+        ("user", "user"),
+        ("user_select", "user"),
+        ("member", "user"),
+        ("role", "role"),
+        ("role_select", "role"),
+        ("mentionable", "mentionable"),
+        ("mentionable_select", "mentionable"),
+        ("channel", "channel"),
+        ("channel_select", "channel"),
+        ("file", "file"),
+        ("file_upload", "file"),
+        ("fileupload", "file"),
+        ("upload", "file"),
+        ("attachment", "file"),
+    ],
+)
+def test_modal_type_name_components_v2(raw_type, expected):
+    assert TicketHub._modal_type_name(raw_type) == expected
+
+
+def test_sanitize_modal_fields_components_v2():
+    raw = [
+        {
+            "label": "Notice",
+            "type": "text_display",
+            "description": "Rules and info",
+            "default": "Important rules",
+            "required": True,
+        },
+        {
+            "label": "Upload Logs",
+            "type": "file",
+            "description": "Screenshots or logs",
+            "min_values": 1,
+            "max_values": 5,
+        },
+        {
+            "label": "Radio Choice",
+            "type": "radio",
+            "choices": ["Opt1", "Opt2", "Opt3"],
+        },
+        {
+            "label": "Multi Select",
+            "type": "checkbox_group",
+            "choices": ["A", "B", "C"],
+            "min_values": 1,
+            "max_values": 2,
+        },
+        {
+            "label": "Agree",
+            "type": "checkbox",
+            "default": "true",
+        },
+    ]
+    sanitized = TicketHub._sanitize_modal_fields(raw)
+    assert len(sanitized) == 5
+    assert sanitized[0]["type"] == "text_display"
+    assert sanitized[0]["required"] is False
+    assert sanitized[0]["description"] == "Rules and info"
+    assert sanitized[1]["type"] == "file"
+    assert sanitized[1]["min_values"] == 1
+    assert sanitized[1]["max_values"] == 5
+    assert sanitized[2]["type"] == "radio"
+    assert len(sanitized[2]["choices"]) == 3
+    assert sanitized[3]["type"] == "checkbox_group"
+    assert sanitized[3]["min_values"] == 1
+    assert sanitized[3]["max_values"] == 2
+    assert sanitized[4]["type"] == "checkbox"
+    assert sanitized[4]["default"] == "true"
+
+
+def test_modal_summary_lines_components_v2():
+    fields = [
+        {"label": "Notice", "type": "text_display", "description": "Read this"},
+        {"label": "Pick", "type": "radio", "choices": ["A", "B"]},
+        {"label": "Terms", "type": "checkbox", "default": "true"},
+        {"label": "Target", "type": "user", "placeholder": "Member"},
+        {"label": "Proof", "type": "file", "min_values": 1, "max_values": 3},
+    ]
+    lines = TicketHub._modal_summary_lines(fields)
+    assert any("text display" in line for line in lines)
+    assert any("radio, required, options: A, B" in line for line in lines)
+    assert any("checkbox, default: checked" in line for line in lines)
+    assert any("user select" in line for line in lines)
+    assert any("file upload, required, files: 1-3" in line for line in lines)
+
+
+def test_ticket_open_modal_components_v2_construction():
+    fields_group_1 = [
+        {"label": "Notice", "type": "text_display", "default": "Guidelines"},
+        {"label": "Title", "type": "text", "description": "Short title", "style": 1},
+        {"label": "Category", "type": "choice", "choices": ["Billing", "Technical"], "description": "Select type"},
+        {"label": "Upload", "type": "file", "description": "Attach file", "min_values": 0, "max_values": 2},
+        {"label": "Urgency", "type": "radio", "choices": ["Low", "High"], "default": "Low"},
+    ]
+    owner = SimpleNamespace(id=42)
+    modal_1 = TicketOpenModal(cog(), None, owner, "main", fields_group_1)
+    payload_1 = modal_1.to_dict()
+    assert payload_1["title"] == "Open Ticket"
+    assert len(payload_1["components"]) == 5
+    assert payload_1["components"][0]["type"] == 10
+    assert payload_1["components"][0]["content"] == "Guidelines"
+    assert payload_1["components"][1]["type"] == 18
+    assert payload_1["components"][1]["component"]["type"] == 4
+    assert payload_1["components"][1]["description"] == "Short title"
+    assert payload_1["components"][2]["type"] == 18
+    assert payload_1["components"][2]["component"]["type"] == 3
+    assert payload_1["components"][3]["type"] == 18
+    assert payload_1["components"][3]["component"]["type"] == 19
+    assert payload_1["components"][4]["type"] == 18
+    assert payload_1["components"][4]["component"]["type"] == 21
+
+    fields_group_2 = [
+        {"label": "Interests", "type": "checkbox_group", "choices": ["News", "Updates"], "default": "News"},
+        {"label": "Confirmed", "type": "checkbox", "default": "true"},
+        {"label": "Assignee", "type": "user"},
+        {"label": "Team", "type": "role"},
+        {"label": "Location", "type": "channel"},
+    ]
+    modal_2 = TicketOpenModal(cog(), None, owner, "main", fields_group_2)
+    payload_2 = modal_2.to_dict()
+    assert len(payload_2["components"]) == 5
+    assert payload_2["components"][0]["component"]["type"] == 22
+    assert payload_2["components"][1]["component"]["type"] == 23
+    assert payload_2["components"][2]["component"]["type"] == 5
+    assert payload_2["components"][3]["component"]["type"] == 6
+    assert payload_2["components"][4]["component"]["type"] == 8
+
+
+def test_ticket_open_modal_input_value_extraction():
+    # 1. TextDisplay
+    td = discord.ui.TextDisplay("Guideline text")
+    assert TicketOpenModal._input_value(td) == ""
+
+    # 2. TextInput
+    ti = discord.ui.TextInput(label="Question")
+    ti._value = "My response"
+    assert TicketOpenModal._input_value(ti) == "My response"
+
+    # 3. Checkbox
+    cb = discord.ui.Checkbox()
+    cb._value = True
+    assert TicketOpenModal._input_value(cb) == "Yes"
+    cb._value = False
+    assert TicketOpenModal._input_value(cb) == "No"
+
+    # 4. RadioGroup
+    rg = discord.ui.RadioGroup(options=[discord.RadioGroupOption(label="OptA")])
+    rg._value = "OptA"
+    assert TicketOpenModal._input_value(rg) == "OptA"
+
+    # 5. CheckboxGroup
+    cg = discord.ui.CheckboxGroup(options=[discord.CheckboxGroupOption(label="OptB")])
+    cg._values = ["OptB", "OptC"]
+    assert TicketOpenModal._input_value(cg) == "OptB, OptC"
+
+    # 6. FileUpload
+    fu = discord.ui.FileUpload()
+    att = SimpleNamespace(filename="test.png", url="https://cdn.example.com/test.png")
+    fu._values = [att]
+    assert TicketOpenModal._input_value(fu) == "[test.png](https://cdn.example.com/test.png)"
+
+    # 7. UserSelect
+    us = discord.ui.UserSelect()
+    us._values = [discord.Object(id=111), discord.Object(id=222)]
+    assert TicketOpenModal._input_value(us) == "<@111> <@222>"
+
+    # 8. RoleSelect
+    rs = discord.ui.RoleSelect()
+    rs._values = [discord.Object(id=333)]
+    assert TicketOpenModal._input_value(rs) == "<@&333>"
+
+    # 9. ChannelSelect
+    cs = discord.ui.ChannelSelect()
+    cs._values = [discord.Object(id=444)]
+    assert TicketOpenModal._input_value(cs) == "<#444>"
+
+    # 10. StringSelect
+    sel = discord.ui.Select(options=[discord.SelectOption(label="S")])
+    sel._values = ["ValA", "ValB"]
+    assert TicketOpenModal._input_value(sel) == "ValA, ValB"
+
+
+def test_reason_modals_use_label_v2():
+    close_modal = TicketCloseReasonModal(cog(), 1, 2, 3)
+    dict_close = close_modal.to_dict()
+    assert len(dict_close["components"]) == 1
+    if MODAL_SELECTS_SUPPORTED:
+        assert dict_close["components"][0]["type"] == 18
+        assert dict_close["components"][0]["label"] == "Reason for closing"
+
+    reopen_modal = TicketReopenReasonModal(cog(), 1, 2, 3)
+    dict_reopen = reopen_modal.to_dict()
+    assert len(dict_reopen["components"]) == 1
+    if MODAL_SELECTS_SUPPORTED:
+        assert dict_reopen["components"][0]["type"] == 18
+        assert dict_reopen["components"][0]["label"] == "Reason for reopening"
+
+
+@pytest.mark.parametrize(
+    "field,value,expected",
+    [
+        ({"type": "text_display"}, "anything", ""),
+        ({"type": "checkbox"}, "yes", "Yes"),
+        ({"type": "checkbox"}, "0", "No"),
+        ({"type": "radio", "choices": ["Low", "High"]}, "1", "Low"),
+        ({"type": "radio", "choices": ["Low", "High"]}, "high", "High"),
+        ({"type": "checkbox_group", "choices": ["Alpha", "Beta"]}, "1, 2", "Alpha, Beta"),
+        ({"type": "checkbox_group", "choices": ["Alpha", "Beta"]}, "alpha", "Alpha"),
+        ({"type": "user"}, "<@123456789012345678>", "<@123456789012345678>"),
+        ({"type": "user"}, "123456789012345678", "<@123456789012345678>"),
+        ({"type": "role"}, "<@&123456789012345678>", "<@&123456789012345678>"),
+        ({"type": "role"}, "123456789012345678", "<@&123456789012345678>"),
+        ({"type": "channel"}, "<#123456789012345678>", "<#123456789012345678>"),
+        ({"type": "channel"}, "123456789012345678", "<#123456789012345678>"),
+    ],
+)
+def test_dm_answer_validation_components_v2(field, value, expected):
+    assert TicketHub._form_answer(field, value) == expected
+
+
+def test_dm_intake_skips_text_display_prompts():
+    async def run():
+        instance = cog()
+        profile = {
+            "form_mode": "text",
+            "creating_modal": [
+                {"label": "Guidelines", "type": "text_display", "default": "Be polite"},
+                {"label": "Reason", "type": "text", "required": True},
+            ],
+        }
+        instance._validate_ticket_open_request = AsyncMock(return_value=("main", profile))
+        instance._ask_dm = AsyncMock(return_value="Issue details")
+        instance._create_ticket = AsyncMock(return_value=({"id": 10}, "channel"))
+        dm_channel = SimpleNamespace(send=AsyncMock())
+        member = SimpleNamespace(id=5, create_dm=AsyncMock(return_value=dm_channel), send=AsyncMock())
+        await instance._open_without_components("guild", member, "main")
+        assert instance._ask_dm.await_count == 1
+        dm_channel.send.assert_awaited_once()
+        kwargs = instance._create_ticket.call_args.kwargs
+        assert kwargs["form_answers"] == [{"label": "Reason", "value": "Issue details"}]
 
     asyncio.run(run())

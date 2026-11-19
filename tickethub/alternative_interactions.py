@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 
 import discord
 from redbot.core import commands
@@ -58,7 +59,40 @@ class AlternativeInteractions:
         if value.lower() == "default" and field.get("default"):
             value = str(field["default"])
         kind = field.get("type", "text")
-        choices = field.get("choices", []) if kind == "choice" else ["Yes", "No"] if kind == "boolean" else []
+        if kind == "text_display":
+            return ""
+        if kind in {"boolean", "checkbox"}:
+            lowered = value.lower()
+            if lowered in {"yes", "y", "true", "1", "checked", "on"}:
+                return "Yes"
+            if lowered in {"no", "n", "false", "0", "unchecked", "off"}:
+                return "No"
+            raise ValueError("Reply with Yes or No.")
+        if kind == "checkbox_group":
+            choices = field.get("choices", [])
+            selected = []
+            for part in value.split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                if part.isdigit() and 1 <= int(part) <= len(choices):
+                    match = choices[int(part) - 1]
+                else:
+                    match = next((choice for choice in choices if choice.casefold() == part.casefold()), None)
+                if match is None:
+                    raise ValueError("Reply with listed choices or numbers separated by commas.")
+                if match not in selected:
+                    selected.append(match)
+            if not selected and field.get("required", True):
+                raise ValueError("Choose at least one option.")
+            min_v = field.get("min_values")
+            max_v = field.get("max_values")
+            if min_v is not None and len(selected) < min_v:
+                raise ValueError(f"Select at least {min_v} option(s).")
+            if max_v is not None and len(selected) > max_v:
+                raise ValueError(f"Select at most {max_v} option(s).")
+            return ", ".join(selected)
+        choices = field.get("choices", []) if kind in {"choice", "radio"} else []
         if choices:
             if value.isdigit() and 1 <= int(value) <= len(choices):
                 value = choices[int(value) - 1]
@@ -66,6 +100,23 @@ class AlternativeInteractions:
             if match is None:
                 raise ValueError("Reply with a listed choice or its number.")
             return match
+        if kind in {"user", "role", "mentionable", "channel"}:
+            cleaned = value.strip()
+            match = re.match(r"^<@!?(&?)(\d+)>$|^<#(\d+)>$|^(\d{15,25})$", cleaned)
+            if match:
+                is_role, user_id, chan_id, raw_id = match.groups()
+                if chan_id:
+                    return f"<#{chan_id}>"
+                if is_role:
+                    return f"<@&{user_id}>"
+                if user_id:
+                    return f"<@{user_id}>"
+                if raw_id:
+                    prefix = "#" if kind == "channel" else "@&" if kind == "role" else "@"
+                    return f"<{prefix}{raw_id}>"
+            if not (1 if field.get("required", True) else 0) <= len(cleaned) <= 4000:
+                raise ValueError("Reply with a valid mention or numeric ID.")
+            return cleaned
         minimum = field.get("min_length") or (1 if field.get("required", True) else 0)
         maximum = field.get("max_length") or 4000
         if not minimum <= len(value) <= maximum:
@@ -74,14 +125,32 @@ class AlternativeInteractions:
 
     async def _ask_dm(self, member, field, mode="text"):
         dm = await member.create_dm()
+        kind = field.get("type", "text")
+        if kind == "text_display":
+            desc = str(field.get("default") or field.get("placeholder") or field.get("description") or field.get("label") or "")
+            await dm.send(embed=discord.Embed(title=field.get("label"), description=desc[:4096]))
+            return ""
+
         choices = (
             field.get("choices", [])
-            if field.get("type") == "choice"
-            else (["Yes", "No"] if field.get("type") == "boolean" else [])
+            if kind in {"choice", "radio", "checkbox_group"}
+            else (["Yes", "No"] if kind in {"boolean", "checkbox"} else [])
         )
-        use_reactions = mode == "reaction" and 0 < len(choices) <= len(CHOICE_EMOJIS)
-        lines = [str(field["label"]), str(field.get("placeholder") or "")]
+        use_reactions = (
+            mode == "reaction" and 0 < len(choices) <= len(CHOICE_EMOJIS) and kind in {"choice", "radio", "boolean", "checkbox"}
+        )
+        lines = [str(field["label"])]
+        if field.get("description"):
+            lines.append(f"*{field['description']}*")
+        if field.get("placeholder"):
+            lines.append(str(field["placeholder"]))
         lines.extend(f"{CHOICE_EMOJIS[i] if use_reactions else i + 1} — {choice}" for i, choice in enumerate(choices))
+        if kind == "checkbox_group":
+            lines.append("Reply with choice names or numbers separated by commas.")
+        elif kind in {"user", "role", "mentionable", "channel"}:
+            lines.append(f"Reply with a {kind} mention or numeric ID.")
+        elif kind == "file":
+            lines.append("Upload or send a file/attachment, or type a file URL.")
         lines.append("Reply within 3 minutes. Type cancel to stop; skip skips optional questions.")
         if field.get("default"):
             lines.append(f"Type default to use: {field['default']}")
@@ -119,7 +188,16 @@ class AlternativeInteractions:
                     await prompt.add_reaction(emoji)
             done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             result = next(iter(done)).result()
-            value = result.content if hasattr(result, "content") else choices[CHOICE_EMOJIS.index(str(result.emoji))]
+            if hasattr(result, "content"):
+                attachments = getattr(result, "attachments", None) or []
+                if attachments:
+                    att_links = [f"[{att.filename}]({att.url})" for att in attachments]
+                    text_content = result.content.strip()
+                    value = "\n".join(att_links) if not text_content else f"{text_content}\n" + "\n".join(att_links)
+                else:
+                    value = result.content
+            else:
+                value = choices[CHOICE_EMOJIS.index(str(result.emoji))]
             return self._form_answer(field, value)
         finally:
             for task in tasks:
@@ -134,6 +212,14 @@ class AlternativeInteractions:
             profile_name, profile = await self._validate_ticket_open_request(guild, member, profile_name)
             answers = []
             for field in profile.get("creating_modal") or []:
+                if field.get("type") == "text_display":
+                    dm = await member.create_dm()
+                    desc = str(
+                        field.get("default") or field.get("placeholder") or field.get("description") or field.get("label") or ""
+                    )
+                    prompt_embed = discord.Embed(title=field.get("label"), description=desc[:4096])
+                    await dm.send(embed=prompt_embed, allowed_mentions=discord.AllowedMentions.none())
+                    continue
                 while True:
                     try:
                         answer = await self._ask_dm(member, field, profile.get("form_mode", "text"))

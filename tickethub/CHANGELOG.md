@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.19.0 - 2026-11-19
+
+- Added support for all Discord Components V2 modal types: TextDisplay, UserSelect, RoleSelect, MentionableSelect, ChannelSelect, FileUpload, RadioGroup, CheckboxGroup, Checkbox, and Label descriptions.
+- Enhanced modal builder, CLI commands, dashboard modal manager, DM intake, and ephemeral step-form questionnaire to handle all Component V2 field types.
+- Included markdown links for modal uploaded files in ticket records, answers, and transcripts.
+
 ## 1.18.1 - 2026-10-28
 
 - Fixed thread tickets adding every member of a broad speak role (such as a basic member role) to new threads. Only support-role members are now auto-added, and `@everyone` is skipped.

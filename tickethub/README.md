@@ -126,12 +126,15 @@ The HTML file is generated with DiscordChatExporterPy when `chat-exporter` is av
 
 ## How Ticket Modals Work
 
-When a profile has form questions configured, clicking that profile's panel button collects the answers before the ticket is created. Current Red installations show text, dropdown, and boolean questions together in a native Discord modal. Older Discord.py versions fall back to the existing ephemeral step form for dropdown and boolean questions. Submitted answers are stored on the ticket record and shown in the ticket channel or thread.
+When a profile has form questions configured, clicking that profile's panel button collects the answers before the ticket is created. Current Red installations show text inputs, text displays, choice dropdowns, radio groups, checkboxes, checkbox groups, user/role/mentionable/channel selects, and file uploads together in a native Discord modal with support for label descriptions. Older Discord.py versions fall back to the ephemeral step form or text inputs. Submitted answers are stored on the ticket record and shown in the ticket channel or thread.
 
 ```text
 [p]ticketset modal wizard main
 [p]ticketset modal add main boolean "Is this urgent?"
 [p]ticketset modal add main choice "Department | Billing, Technical, Other"
+[p]ticketset modal add main radio "Priority | Low, Medium, High"
+[p]ticketset modal add main user "Account owner"
+[p]ticketset modal add main file "Screenshots"
 [p]ticketset modal show main
 ```
 

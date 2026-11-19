@@ -876,6 +876,13 @@ class DashboardIntegration:
             )
             if not label:
                 raise commands.BadArgument("Enabled modal questions need a label.")
+            description = (
+                self._clean_modal_text(
+                    self._dash_value(form_data, f"modal_{index}_description"),
+                    100,
+                )
+                or None
+            )
             question_type = (
                 self._modal_type_name(
                     self._dash_value(form_data, f"modal_{index}_type"),
@@ -885,9 +892,13 @@ class DashboardIntegration:
             choices = self._clean_modal_choices(
                 self._dash_value(form_data, f"modal_{index}_choices"),
             )
-            if question_type == "choice" and len(choices) < 2:
+            if question_type in {"choice", "radio"} and len(choices) < 2:
                 raise commands.BadArgument(
-                    "Choice questions need at least two choices.",
+                    f"{question_type.replace('_', ' ').title()} questions need at least two choices.",
+                )
+            if question_type == "checkbox_group" and len(choices) < 1:
+                raise commands.BadArgument(
+                    "Checkbox group questions need at least one choice.",
                 )
             style_name = self._dash_value(form_data, f"modal_{index}_style")
             style = discord.TextStyle.short.value if style_name == "short" else discord.TextStyle.paragraph.value
@@ -905,12 +916,29 @@ class DashboardIntegration:
                 maximum=4000,
                 optional=True,
             )
+            min_values = self._dash_int(
+                form_data,
+                f"modal_{index}_min_values",
+                minimum=0,
+                maximum=25,
+                optional=True,
+            )
+            max_values = self._dash_int(
+                form_data,
+                f"modal_{index}_max_values",
+                minimum=1,
+                maximum=25,
+                optional=True,
+            )
             fields.append(
                 {
                     "label": label,
+                    "description": description,
                     "type": question_type,
                     "style": style,
-                    "required": self._dash_bool(form_data, f"modal_{index}_required"),
+                    "required": (
+                        False if question_type == "text_display" else self._dash_bool(form_data, f"modal_{index}_required")
+                    ),
                     "default": self._clean_modal_text(
                         self._dash_value(form_data, f"modal_{index}_default"),
                         4000,
@@ -921,6 +949,8 @@ class DashboardIntegration:
                     ),
                     "min_length": min_length,
                     "max_length": max_length,
+                    "min_values": min_values,
+                    "max_values": max_values,
                     "choices": choices,
                 },
             )
@@ -947,22 +977,46 @@ class DashboardIntegration:
         )
         if not label:
             raise commands.BadArgument("New modal questions need a label.")
+        description = (
+            self._clean_modal_text(
+                self._dash_value(form_data, "add_modal_description"),
+                100,
+            )
+            or None
+        )
 
         question_type = self._modal_type_name(self._dash_value(form_data, "add_modal_type")) or "text"
         choices = self._clean_modal_choices(
             self._dash_value(form_data, "add_modal_choices"),
         )
-        if question_type == "choice" and len(choices) < 2:
-            raise commands.BadArgument("Choice questions need at least two choices.")
+        if question_type in {"choice", "radio"} and len(choices) < 2:
+            raise commands.BadArgument(f"{question_type.replace('_', ' ').title()} questions need at least two choices.")
+        if question_type == "checkbox_group" and len(choices) < 1:
+            raise commands.BadArgument("Checkbox group questions need at least one choice.")
 
         style_name = self._dash_value(form_data, "add_modal_style")
         style = discord.TextStyle.short.value if style_name == "short" else discord.TextStyle.paragraph.value
+        min_values = self._dash_int(
+            form_data,
+            "add_modal_min_values",
+            minimum=0,
+            maximum=25,
+            optional=True,
+        )
+        max_values = self._dash_int(
+            form_data,
+            "add_modal_max_values",
+            minimum=1,
+            maximum=25,
+            optional=True,
+        )
         fields.append(
             {
                 "label": label,
+                "description": description,
                 "type": question_type,
                 "style": style,
-                "required": self._dash_bool(form_data, "add_modal_required"),
+                "required": (False if question_type == "text_display" else self._dash_bool(form_data, "add_modal_required")),
                 "default": self._clean_modal_text(
                     self._dash_value(form_data, "add_modal_default"),
                     4000,
@@ -973,6 +1027,8 @@ class DashboardIntegration:
                 ),
                 "min_length": None,
                 "max_length": None,
+                "min_values": min_values,
+                "max_values": max_values,
                 "choices": choices,
             },
         )
@@ -1794,6 +1850,23 @@ class DashboardIntegration:
         </div>
         """
 
+    def _modal_type_options(self, selected: str) -> str:
+        types = [
+            ("text", "Text"),
+            ("text_display", "Text Display (Notice)"),
+            ("choice", "Choice (Dropdown)"),
+            ("radio", "Radio Group"),
+            ("checkbox", "Checkbox Toggle"),
+            ("checkbox_group", "Checkbox Group"),
+            ("boolean", "Boolean (Yes/No)"),
+            ("user", "User Select"),
+            ("role", "Role Select"),
+            ("mentionable", "Mentionable Select"),
+            ("channel", "Channel Select"),
+            ("file", "File Upload"),
+        ]
+        return "".join(self._option(t, label, selected) for t, label in types)
+
     def _dashboard_modal_section(
         self,
         profile_name: str,
@@ -1813,9 +1886,16 @@ class DashboardIntegration:
                     {self._checked(index < len(fields))}> Question {index + 1}</label>
                     <div class="th-row">
                         {self._input(f"modal_{index}_label", "Label", field.get("label") or "")}
+                        {
+                    self._input(
+                        f"modal_{index}_description",
+                        "Label Description",
+                        field.get("description") or "",
+                    )
+                }
                         <div class="th-field"><label>Type</label><select name="modal_{index}_type">{
-                    self._option("text", "Text", field_type)
-                }{self._option("choice", "Choice", field_type)}{self._option("boolean", "Boolean", field_type)}</select></div>
+                    self._modal_type_options(field_type)
+                }</select></div>
                         <div class="th-field"><label>Text Style</label><select
                         name="modal_{index}_style">{self._option("paragraph", "Paragraph", style)}{
                     self._option("short", "Short", style)
@@ -1846,8 +1926,28 @@ class DashboardIntegration:
                         max_value=4000,
                     )
                 }
+                        {
+                    self._input(
+                        f"modal_{index}_min_values",
+                        "Min Values",
+                        "" if field.get("min_values") is None else field.get("min_values"),
+                        "number",
+                        min_value=0,
+                        max_value=25,
+                    )
+                }
+                        {
+                    self._input(
+                        f"modal_{index}_max_values",
+                        "Max Values",
+                        "" if field.get("max_values") is None else field.get("max_values"),
+                        "number",
+                        min_value=1,
+                        max_value=25,
+                    )
+                }
                     </div>
-                    {self._input(f"modal_{index}_choices", "Choices", ", ".join(field.get("choices") or []))}
+                    {self._input(f"modal_{index}_choices", "Choices (comma-separated)", ", ".join(field.get("choices") or []))}
                 </div>
                 """,
             )
@@ -1890,9 +1990,10 @@ class DashboardIntegration:
                     <input type="hidden" name="selected_profile" value="{self._h(profile_name)}">
                     <div class="th-row">
                         {self._input("add_modal_label", "New Question Label", "")}
+                        {self._input("add_modal_description", "Label Description (optional)", "")}
                         <div class="th-field"><label>Type</label><select name="add_modal_type">{
-            self._option("text", "Text", "text")
-        }{self._option("choice", "Choice", "text")}{self._option("boolean", "Boolean", "text")}</select></div>
+            self._modal_type_options("text")
+        }</select></div>
                         <div class="th-field"><label>Text Style</label><select
                         name="add_modal_style">{self._option("paragraph", "Paragraph", "paragraph")}{
             self._option("short", "Short", "paragraph")
@@ -1903,8 +2004,10 @@ class DashboardIntegration:
                     <div class="th-row">
                         {self._input("add_modal_placeholder", "Placeholder", "")}
                         {self._input("add_modal_default", "Default", "")}
+                        {self._input("add_modal_min_values", "Min Values", "", "number", min_value=0, max_value=25)}
+                        {self._input("add_modal_max_values", "Max Values", "", "number", min_value=1, max_value=25)}
                     </div>
-                    {self._input("add_modal_choices", "Choices for Choice Type", "")}
+                    {self._input("add_modal_choices", "Choices (comma-separated)", "")}
                     <button class="th-btn secondary" type="submit">Add Question</button>
                 </form>
                 {remove_form}
