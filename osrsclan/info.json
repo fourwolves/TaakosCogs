@@ -1,0 +1,17 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Cog-Creators/Red-DiscordBot/V3/develop/schema/red_cog.schema.json",
+  "name": "osrsclan",
+  "author": ["fourwolves"],
+  "version": "1.0.0",
+  "description": "Look up a TempleOSRS clan and its members, and sync Discord clan rank roles based on current server tenure and staff-approved OSRS account links.",
+  "install_msg": "OSRSClan installed. Use `[p]osrsclan set group <id>` to configure TempleOSRS and `[p]osrsclan` for help. Automatic rank sync is off by default.",
+  "short": "TempleOSRS clan stats, member lookups, and Discord tenure ranks.",
+  "tags": ["osrs", "runescape", "clan", "templeosrs", "roles"],
+  "requirements": ["aiohttp"],
+  "min_bot_version": "3.5.0",
+  "min_python_version": [3, 10, 0],
+  "hidden": false,
+  "disabled": false,
+  "type": "COG",
+  "end_user_data_statement": "Stores Discord user IDs linked by server staff to their Old School RuneScape display names, per server. Stores the TempleOSRS group ID, rank thresholds, Discord role IDs, and automatic sync setting. Reads current join dates from Discord without storing them. Sends only group IDs and RuneScape display names to the public TempleOSRS API for lookups."
+}

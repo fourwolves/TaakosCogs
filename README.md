@@ -32,12 +32,13 @@ To update installed cogs:
 
 ## Dashboard Support
 
-Every configurable cog includes its own purpose-built Red-Web-Dashboard page with labeled fields, Discord channel and role selectors, validation, and cog-specific actions. Stateless utilities use focused operation or live-status pages instead of showing an empty settings editor. No cog relies on the generic JSON configuration fallback.
+Configurable cogs include purpose-built Red-Web-Dashboard pages. OSRSClan shows clan and rank settings read-only and keeps configuration and role changes in Discord. Stateless utilities use focused operation or live-status pages instead of showing an empty settings editor. No cog relies on the generic JSON configuration fallback.
 
 ## Cog Catalog
 
 | Cog                                    | Best For                 | Highlights                                                                                                                                  |
 | -------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| [osrsclan](./osrsclan)                 | Old School RuneScape clans | TempleOSRS group and player stats, staff-approved account links, and Discord tenure ranks.                                                  |
 | [forumflow](./forumflow)               | Help forums              | Persistent claim/state controls, accepted answers, workflow tags, stale queues, resolution metrics, and CSV exports.                       |
 | [staffops](./staffops)                 | Staff coordination       | Clocked shifts, availability, leave requests, on-call rotations, handoffs, coverage visibility, and hour reports.                          |
 | [opsroom](./opsroom)                   | Incident response        | Dedicated incident channels, severity/status, commanders, timelines, stakeholder updates, actions, and postmortems.                        |

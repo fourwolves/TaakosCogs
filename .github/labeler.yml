@@ -131,6 +131,10 @@ new-cog:
   - changed-files:
       - any-glob-to-any-file: "opsroom/**"
 
+"cog: osrsclan":
+  - changed-files:
+      - any-glob-to-any-file: "osrsclan/**"
+
 "cog: paranoia":
   - changed-files:
       - any-glob-to-any-file: "paranoia/**"
