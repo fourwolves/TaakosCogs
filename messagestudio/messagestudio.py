@@ -827,6 +827,17 @@ class MessageStudio(DashboardIntegration, WebUIIntegration, commands.Cog):
         else:
             content = "\n".join(summaries) or "No configured action matched this selection."
             await self._interaction_reply(interaction, content[:2000], ephemeral=True)
+        # RESET SELECTION MENUS AFTER HANDLING INTERACTION
+        if interaction.message and interaction.data.get("component_type") in {3, 5, 6, 7, 8}:
+            try:
+                view = (
+                    discord.ui.LayoutView.from_message(interaction.message, timeout=None)
+                    if interaction.message.flags.components_v2
+                    else discord.ui.View.from_message(interaction.message, timeout=None)
+                )
+                await interaction.message.edit(view=view)
+            except discord.HTTPException:
+                pass
 
     @staticmethod
     def _format_action_text(text: str, interaction: discord.Interaction, values: list[str]) -> str:
