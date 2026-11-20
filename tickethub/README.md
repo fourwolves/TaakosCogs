@@ -281,6 +281,7 @@ Existing open ticket records, modlog cases, and forum tags are not imported.
 | `[p]ticketset profile list`                           | List configured profiles and their ticket counts.  |
 | `[p]ticketset profile create <profile>`               | Create a new profile.                              |
 | `[p]ticketset profile delete <profile> confirm`       | Delete an unused profile.                          |
+| `[p]ticketset profile panelappearance <profile> <field> [value]` | Configure panel embed styles and button/dropdown appearance. |
 | `[p]ticketset channelname [profile] [template]`       | Show or set a profile's channel-name template.     |
 | `[p]ticket open [profile] [reason]`                | Open a ticket by command.                          |
 | `[p]ticket createfor <member> [profile] [reason]`  | Create a ticket for another member.                |
