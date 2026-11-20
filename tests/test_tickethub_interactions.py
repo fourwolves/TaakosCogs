@@ -610,7 +610,6 @@ def test_dm_intake_skips_text_display_prompts():
     asyncio.run(run())
 
 
-
 def test_panel_embed_customization():
     instance = cog()
     guild = SimpleNamespace(name="Support Guild", icon=None)
@@ -712,7 +711,6 @@ def test_ticketset_profile_panelappearance_command():
         assert profile["panel_show_details"] is False
 
     asyncio.run(run())
-
 
 
 def test_dashboard_modal_section_attributes_and_script():
@@ -845,5 +843,399 @@ def test_dashboard_save_multi_panel_posts_new_message():
         assert embed.title == "Multi Help"
         assert embed.description == "Pick an option"
         assert embed.color.value == 0x123456
+
+    asyncio.run(run())
+
+
+def test_dashboard_profile_section_excludes_panel_fields():
+    instance = cog()
+    profile = instance._default_profile()
+    guild = SimpleNamespace(roles=[SimpleNamespace(id=1, name="Role1", position=1)], categories=[], text_channels=[])
+    html = instance._dashboard_profile_section(guild, "main", profile, "<csrf>")
+
+    assert 'name="panel_style"' not in html
+    assert 'name="panel_channel_id"' not in html
+    assert 'name="panel_message_id"' not in html
+    assert 'name="panel_title"' not in html
+    assert 'name="panel_message"' not in html
+    assert 'name="panel_color"' not in html
+    assert 'name="panel_button_label"' not in html
+    assert 'name="panel_dropdown_placeholder"' not in html
+
+    assert "Ticket Control Buttons" in html
+    assert 'data-btn-card="1"' in html
+    assert 'data-btn-enabled="1"' in html
+    assert 'data-btn-action-select="1"' in html
+    assert "btn_0_id" in html
+    assert "btn_0_action" in html
+
+
+def test_dashboard_save_profile_preserves_panel_configuration():
+    async def run():
+        instance = cog()
+        profile = instance._default_profile()
+        profile["panel_title"] = "VIP Ticket Support"
+        profile["panel_color"] = 0xFF5500
+        profile["panel_channel_id"] = 777
+        profile["panel_message_id"] = 888
+        profile["panel_style"] = "dropdown"
+        profile["panel_button_label"] = "Click Here"
+
+        instance._ensure_profile = AsyncMock(return_value=profile)
+        instance._set_profile = AsyncMock()
+        instance._dashboard_refresh_profile_panel = AsyncMock()
+        instance.config = SimpleNamespace(
+            guild=lambda _: SimpleNamespace(
+                tickets=AsyncMock(return_value={}),
+            )
+        )
+
+        form_data = {
+            "selected_profile": "main",
+            "profile_enabled": "1",
+            "channel_name": "ticket-{id}",
+        }
+        guild = SimpleNamespace(id=1)
+        name = await instance._dashboard_save_profile(guild, form_data)
+        assert name == "main"
+        assert profile["panel_title"] == "VIP Ticket Support"
+        assert profile["panel_color"] == 0xFF5500
+        assert profile["panel_channel_id"] == 777
+        assert profile["panel_message_id"] == 888
+        assert profile["panel_style"] == "dropdown"
+        assert profile["panel_button_label"] == "Click Here"
+        assert profile["channel_name"] == "ticket-{id}"
+
+    asyncio.run(run())
+
+
+def test_control_buttons_schema_and_sanitization():
+    default_buttons = TicketHub._default_control_buttons()
+    assert len(default_buttons) == 10
+    action_ids = [b["id"] for b in default_buttons]
+    assert "claim" in action_ids
+    assert "lock" in action_ids
+    assert "close" in action_ids
+    assert "members" in action_ids
+    assert "transcript" in action_ids
+    assert "delete" in action_ids
+    assert "custom_1" in action_ids
+
+    sanitized = TicketHub._sanitize_control_buttons(None, control_emojis={"claim": "👍", "unclaim": "👎"})
+    assert len(sanitized) == 10
+    claim_btn = next(b for b in sanitized if b["id"] == "claim")
+    assert claim_btn["emoji"] == "👍"
+    assert claim_btn["alt_emoji"] == "👎"
+
+    raw = [
+        {
+            "id": "my_btn",
+            "action": "close_now",
+            "enabled": True,
+            "label": "Instant Close",
+            "style": "danger",
+            "visibility": "open",
+            "row": 3,
+            "allowed_groups": ["support", "invalid_group"],
+            "allowed_role_ids": ["123", "abc", 456],
+            "action_message": "Goodbye",
+        }
+    ]
+    cleaned = TicketHub._sanitize_control_buttons(raw)
+    assert len(cleaned) == 10
+    my_btn = next(b for b in cleaned if b["id"] == "my_btn")
+    assert my_btn["action"] == "close_now"
+    assert my_btn["style"] == "danger"
+    assert my_btn["row"] == 3
+    assert my_btn["allowed_groups"] == ["support"]
+    assert my_btn["allowed_role_ids"] == [123, 456]
+    assert my_btn["action_message"] == "Goodbye"
+
+
+def test_dashboard_tabs_script_includes_control_buttons():
+    instance = cog()
+    script = instance._dashboard_tabs_script()
+    assert "updateControlButtons" in script
+    assert "data-btn-card" in script
+    assert "data-btn-action-select" in script
+
+
+def test_ticket_control_view_rendering_and_visibility():
+    instance = cog()
+    profile = instance._default_profile()
+
+    open_record = {"id": 1, "status": "open", "claimed_by": None, "locked": False}
+    open_view = instance._ticket_control_view(profile, open_record)
+    assert open_view is not None
+    open_ids = [b.button_id for b in open_view.children]
+    assert "claim" in open_ids
+    assert "lock" in open_ids
+    assert "close" in open_ids
+    assert "members" in open_ids
+    assert "transcript" in open_ids
+    assert "delete" not in open_ids
+
+    claimed_record = {"id": 1, "status": "open", "claimed_by": 999, "locked": False}
+    claimed_view = instance._ticket_control_view(profile, claimed_record)
+    claim_btn = claimed_view._button_map["claim"]
+    assert claim_btn.label == "Unclaim"
+    assert str(claim_btn.emoji) == "🔓"
+
+    locked_record = {"id": 1, "status": "open", "claimed_by": None, "locked": True}
+    locked_view = instance._ticket_control_view(profile, locked_record)
+    lock_btn = locked_view._button_map["lock"]
+    assert lock_btn.label == "Unlock"
+    assert lock_btn.style == discord.ButtonStyle.success
+
+    closed_record = {"id": 1, "status": "closed", "claimed_by": None, "locked": False}
+    closed_view = instance._ticket_control_view(profile, closed_record)
+    closed_ids = [b.button_id for b in closed_view.children]
+    assert "delete" in closed_ids
+    assert "close" in closed_ids
+    assert "claim" not in closed_ids
+    assert "lock" not in closed_ids
+    close_btn = closed_view._button_map["close"]
+    assert close_btn.label == "Reopen"
+    assert close_btn.style == discord.ButtonStyle.secondary
+
+
+def test_can_use_ticket_button_permissions():
+    instance = cog()
+    instance.bot = SimpleNamespace(owner_ids={1})
+    instance._is_support_member = Mock(return_value=False)
+
+    admin_member = SimpleNamespace(
+        id=10,
+        guild_permissions=SimpleNamespace(administrator=True, manage_guild=True),
+        roles=[],
+    )
+    user_member = SimpleNamespace(
+        id=20,
+        guild_permissions=SimpleNamespace(administrator=False, manage_guild=False),
+        roles=[],
+    )
+    owner_member = SimpleNamespace(
+        id=30,
+        guild_permissions=SimpleNamespace(administrator=False, manage_guild=False),
+        roles=[],
+    )
+
+    profile = instance._default_profile()
+    record = {"owner_id": 30, "claimed_by": 40, "participants": [20, 30]}
+
+    # Admin always allowed
+    btn = {"action": "delete", "allowed_groups": ["support"], "allowed_role_ids": []}
+    assert instance._can_use_ticket_button(admin_member, btn, profile, record) is True
+
+    # Owner group check
+    btn_owner = {"action": "custom", "allowed_groups": ["owner"], "allowed_role_ids": []}
+    assert instance._can_use_ticket_button(owner_member, btn_owner, profile, record) is True
+    assert instance._can_use_ticket_button(user_member, btn_owner, profile, record) is False
+
+    # Claimed by group check
+    claimed_member = SimpleNamespace(
+        id=40,
+        guild_permissions=SimpleNamespace(administrator=False, manage_guild=False),
+        roles=[],
+    )
+    btn_claimed = {"action": "custom", "allowed_groups": ["claimed_by"], "allowed_role_ids": []}
+    assert instance._can_use_ticket_button(claimed_member, btn_claimed, profile, record) is True
+    assert instance._can_use_ticket_button(user_member, btn_claimed, profile, record) is False
+
+    # Participants group check
+    btn_part = {"action": "custom", "allowed_groups": ["participants"], "allowed_role_ids": []}
+    assert instance._can_use_ticket_button(user_member, btn_part, profile, record) is True
+    outsider = SimpleNamespace(id=99, guild_permissions=SimpleNamespace(administrator=False, manage_guild=False), roles=[])
+    assert instance._can_use_ticket_button(outsider, btn_part, profile, record) is False
+
+    # Everyone group check
+    btn_everyone = {"action": "custom", "allowed_groups": ["everyone"], "allowed_role_ids": []}
+    assert instance._can_use_ticket_button(outsider, btn_everyone, profile, record) is True
+
+    # Role ID check
+    role_member = SimpleNamespace(
+        id=50,
+        guild_permissions=SimpleNamespace(administrator=False, manage_guild=False),
+        roles=[SimpleNamespace(id=777)],
+    )
+    btn_role = {"action": "custom", "allowed_groups": [], "allowed_role_ids": [777]}
+    assert instance._can_use_ticket_button(role_member, btn_role, profile, record) is True
+    assert instance._can_use_ticket_button(user_member, btn_role, profile, record) is False
+
+
+def test_handle_ticket_control_interaction_builtin_actions():
+    async def run():
+        instance = cog()
+        instance.bot = SimpleNamespace(owner_ids={1})
+        instance._is_support_member = Mock(return_value=True)
+
+        member = SimpleNamespace(
+            id=1,
+            display_name="Admin",
+            mention="<@1>",
+            guild_permissions=SimpleNamespace(administrator=True, manage_guild=True),
+            roles=[],
+        )
+        guild = SimpleNamespace(id=1, get_role=lambda _: None, get_member=lambda _: member)
+        channel = SimpleNamespace(id=10, send=AsyncMock())
+        message = SimpleNamespace(id=20)
+
+        record = {"id": 5, "profile_ticket_id": 1, "profile": "main", "status": "open", "owner_id": 1}
+        instance._find_ticket_by_control_message = AsyncMock(return_value=("key", record))
+        instance._get_profile = AsyncMock(return_value=instance._default_profile())
+        instance._safe_interaction_reply = AsyncMock()
+
+        # Instant close
+        instance._validate_close_request = AsyncMock()
+        instance._close_ticket = AsyncMock()
+        interaction = SimpleNamespace(
+            guild=guild,
+            user=member,
+            message=message,
+            channel=channel,
+            response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock(), is_done=lambda: False),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+        await instance.handle_ticket_control_interaction(interaction, "close_now")
+        instance._close_ticket.assert_awaited_once()
+
+        # Instant reopen
+        record["status"] = "closed"
+        instance._validate_reopen_request = AsyncMock()
+        instance._reopen_ticket = AsyncMock()
+        await instance.handle_ticket_control_interaction(interaction, "reopen_now")
+        instance._reopen_ticket.assert_awaited_once()
+
+        # Delete
+        instance._delete_ticket_channel = AsyncMock()
+        await instance.handle_ticket_control_interaction(interaction, "delete")
+        instance._delete_ticket_channel.assert_awaited_once()
+
+    asyncio.run(run())
+
+
+def test_handle_ticket_control_interaction_custom_actions():
+    async def run():
+        instance = cog()
+        instance.bot = SimpleNamespace(owner_ids={1})
+        instance._is_support_member = Mock(return_value=True)
+
+        role = SimpleNamespace(id=77, name="Support Staff", mention="<@&77>")
+        owner = SimpleNamespace(
+            id=2, display_name="Alice", mention="<@2>", roles=[role], add_roles=AsyncMock(), remove_roles=AsyncMock()
+        )
+        admin = SimpleNamespace(
+            id=1,
+            display_name="Admin",
+            mention="<@1>",
+            guild_permissions=SimpleNamespace(administrator=True, manage_guild=True),
+            roles=[],
+        )
+        guild = SimpleNamespace(
+            id=1, get_role=lambda rid: role if rid == 77 else None, get_member=lambda uid: owner if uid == 2 else admin
+        )
+        channel = SimpleNamespace(id=10, send=AsyncMock())
+        message = SimpleNamespace(id=20)
+
+        profile = instance._default_profile()
+        profile["control_buttons"] = [
+            {
+                "id": "btn_msg",
+                "action": "send_message",
+                "enabled": True,
+                "label": "Send",
+                "action_message": "Hello {owner_name}!",
+                "action_embed_title": "Notice",
+                "ephemeral_response": False,
+                "allowed_groups": [],
+                "allowed_role_ids": [],
+            },
+            {
+                "id": "btn_ping",
+                "action": "ping_roles",
+                "enabled": True,
+                "label": "Ping",
+                "action_message": "Help needed!",
+                "action_role_ids": [77],
+                "ephemeral_response": False,
+                "allowed_groups": [],
+                "allowed_role_ids": [],
+            },
+            {
+                "id": "btn_toggle",
+                "action": "toggle_role",
+                "enabled": True,
+                "label": "VIP",
+                "action_role_ids": [77],
+                "ephemeral_response": True,
+                "allowed_groups": [],
+                "allowed_role_ids": [],
+            },
+        ]
+
+        record = {"id": 5, "profile_ticket_id": 1, "profile": "main", "status": "open", "owner_id": 2}
+        instance._find_ticket_by_control_message = AsyncMock(return_value=("key", record))
+        instance._fetch_ticket_channel = AsyncMock(return_value=channel)
+        instance._get_profile = AsyncMock(return_value=profile)
+        instance._safe_interaction_reply = AsyncMock()
+
+        interaction = SimpleNamespace(
+            guild=guild,
+            user=admin,
+            message=message,
+            channel=channel,
+            response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock(), is_done=lambda: False),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+
+        # 1. send_message
+        await instance.handle_ticket_control_interaction(interaction, "btn_msg")
+        channel.send.assert_awaited_once()
+        embed = channel.send.call_args.kwargs["embed"]
+        assert embed.title == "Notice"
+        assert embed.description == "Hello Alice!"
+
+        # 2. ping_roles
+        channel.send.reset_mock()
+        await instance.handle_ticket_control_interaction(interaction, "btn_ping")
+        channel.send.assert_awaited_once()
+        content = channel.send.call_args.args[0]
+        assert "<@&77>" in content
+        assert "Help needed!" in content
+
+        # 3. toggle_role (owner already has role, so remove_roles called)
+        await instance.handle_ticket_control_interaction(interaction, "btn_toggle")
+        owner.remove_roles.assert_awaited_once_with(role, reason="TicketHub button toggle by Admin")
+
+    asyncio.run(run())
+
+
+def test_dynamic_on_interaction_listener():
+    async def run():
+        instance = cog()
+        instance.handle_ticket_control_interaction = AsyncMock()
+
+        # Regular button interaction
+        interaction = SimpleNamespace(
+            type=discord.InteractionType.component,
+            guild=SimpleNamespace(id=1),
+            message=SimpleNamespace(id=10),
+            data={"custom_id": "taakoscogs:tickethub:btn:custom_1"},
+            response=SimpleNamespace(is_done=lambda: False),
+        )
+        await instance.on_interaction(interaction)
+        instance.handle_ticket_control_interaction.assert_awaited_once_with(interaction, "custom_1")
+
+        # Ignore panel open button
+        instance.handle_ticket_control_interaction.reset_mock()
+        interaction.data["custom_id"] = "taakoscogs:tickethub:open"
+        await instance.on_interaction(interaction)
+        instance.handle_ticket_control_interaction.assert_not_awaited()
+
+        # Ignore already completed interaction
+        interaction.data["custom_id"] = "taakoscogs:tickethub:btn:custom_2"
+        interaction.response.is_done = lambda: True
+        await instance.on_interaction(interaction)
+        instance.handle_ticket_control_interaction.assert_not_awaited()
 
     asyncio.run(run())

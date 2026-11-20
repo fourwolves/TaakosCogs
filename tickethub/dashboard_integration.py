@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import html
 import logging
 import typing
@@ -399,6 +400,50 @@ class DashboardIntegration:
     addForm.addEventListener("change", () => updateModalCard(addForm));
     addForm.addEventListener("input", () => updateModalCard(addForm));
   }
+
+  const updateControlButtons = (card) => {
+    const actionSelect = card.querySelector("[data-btn-action-select]");
+    const enabledCheck = card.querySelector("[data-btn-enabled]");
+    const fieldsWrap = card.querySelector("[data-btn-fields]");
+    const summaryBadge = card.querySelector("[data-btn-summary]");
+    const labelInput = card.querySelector('input[name$="_label"]');
+
+    if (enabledCheck && fieldsWrap) {
+      const isEnabled = enabledCheck.checked;
+      card.classList.toggle("is-disabled", !isEnabled);
+      fieldsWrap.style.display = isEnabled ? "" : "none";
+    }
+
+    if (!actionSelect) return;
+    const action = actionSelect.value;
+    const label = labelInput?.value.trim() || "Untitled";
+    const isEnabled = enabledCheck ? enabledCheck.checked : true;
+    if (summaryBadge) {
+      summaryBadge.textContent = isEnabled ? `${label} • ${action}` : "Disabled";
+    }
+
+    const show = (selector, condition) => {
+      card.querySelectorAll(selector).forEach((el) => {
+        el.style.display = condition ? "" : "none";
+      });
+    };
+
+    const isToggle = ["claim_toggle", "lock_toggle", "close_toggle"].includes(action);
+    const isCustom = ["send_message", "ping_roles", "toggle_role"].includes(action);
+    show('[data-btn-field="toggle_alt"]', isToggle);
+    show('[data-btn-field="custom_action"]', isCustom);
+    show('[data-btn-field="custom_message"]', isCustom);
+    show('[data-btn-field="custom_embed"]', action === "send_message");
+    show('[data-btn-field="custom_roles"]', ["ping_roles", "toggle_role"].includes(action));
+    show('[data-btn-field="custom_ephemeral"]', isCustom);
+  };
+
+  root.querySelectorAll("[data-btn-card]").forEach((card) => {
+    updateControlButtons(card);
+    card.addEventListener("change", () => updateControlButtons(card));
+    card.addEventListener("input", () => updateControlButtons(card));
+  });
+
 
   const updatePanelStyle = (form) => {
     const styleSelect = form.querySelector("[data-panel-style-select]");
@@ -811,18 +856,21 @@ class DashboardIntegration:
         profile["control_mode"] = self._parse_interaction_mode(self._dash_value(form_data, "control_mode", old_control_mode))
 
         profile["enabled"] = self._dash_bool(form_data, "profile_enabled")
-        profile["panel_style"] = self._parse_panel_style(
-            self._dash_value(form_data, "panel_style", "button"),
-        )
+        if "panel_style" in form_data:
+            profile["panel_style"] = self._parse_panel_style(
+                self._dash_value(form_data, "panel_style", profile.get("panel_style", "button")),
+            )
         profile["ticket_mode"] = "thread" if self._dash_value(form_data, "ticket_mode") == "thread" else "channel"
-        profile["panel_channel_id"] = self._dash_optional_id(
-            form_data,
-            "panel_channel_id",
-        )
-        profile["panel_message_id"] = self._dash_optional_id(
-            form_data,
-            "panel_message_id",
-        )
+        if "panel_channel_id" in form_data:
+            profile["panel_channel_id"] = self._dash_optional_id(
+                form_data,
+                "panel_channel_id",
+            )
+        if "panel_message_id" in form_data:
+            profile["panel_message_id"] = self._dash_optional_id(
+                form_data,
+                "panel_message_id",
+            )
         profile["ticket_category_id"] = self._dash_optional_id(
             form_data,
             "ticket_category_id",
@@ -857,37 +905,55 @@ class DashboardIntegration:
         profile["channel_name"] = self._validate_channel_name_template(
             self._dash_value(form_data, "channel_name", "ticket-{id}-{owner_name}"),
         )
-        profile["panel_title"] = self._clean_modal_text(self._dash_value(form_data, "panel_title"), 256) or "Need Help?"
-        profile["panel_message"] = (
-            self._clean_modal_text(self._dash_value(form_data, "panel_message"), 2048)
-            or "Open a ticket and staff will help you as soon as possible."
-        )
-        profile["panel_color"] = self._sanitize_panel_color(self._dash_value(form_data, "panel_color"))
-        profile["panel_footer"] = self._clean_modal_text(self._dash_value(form_data, "panel_footer"), 2048) or "TicketHub"
-        profile["panel_image_url"] = self._dash_value(form_data, "panel_image_url").strip() or None
-        profile["panel_thumbnail_url"] = self._dash_value(form_data, "panel_thumbnail_url").strip() or None
-        profile["panel_show_details"] = self._dash_bool(form_data, "panel_show_details")
-        profile["panel_button_label"] = (
-            self._clean_modal_text(self._dash_value(form_data, "panel_button_label"), 80) or "Open Ticket"
-        )
-        profile["panel_button_emoji"] = self._dash_value(form_data, "panel_button_emoji").strip() or DEFAULT_PANEL_BUTTON_EMOJI
-        profile["panel_button_style"] = self._parse_button_style(self._dash_value(form_data, "panel_button_style", "primary"))
-        profile["panel_dropdown_placeholder"] = (
-            self._clean_modal_text(self._dash_value(form_data, "panel_dropdown_placeholder"), 100) or "Open a ticket..."
-        )
-        profile["panel_dropdown_label"] = (
-            self._clean_modal_text(self._dash_value(form_data, "panel_dropdown_label"), 100)
-            or profile["panel_button_label"]
-            or "Open Ticket"
-        )
-        profile["panel_dropdown_emoji"] = (
-            self._dash_value(form_data, "panel_dropdown_emoji").strip()
-            or profile["panel_button_emoji"]
-            or DEFAULT_PANEL_BUTTON_EMOJI
-        )
-        profile["panel_dropdown_description"] = (
-            self._clean_modal_text(self._dash_value(form_data, "panel_dropdown_description"), 100) or None
-        )
+        if "panel_title" in form_data:
+            profile["panel_title"] = self._clean_modal_text(self._dash_value(form_data, "panel_title"), 256) or "Need Help?"
+        if "panel_message" in form_data:
+            profile["panel_message"] = (
+                self._clean_modal_text(self._dash_value(form_data, "panel_message"), 2048)
+                or "Open a ticket and staff will help you as soon as possible."
+            )
+        if "panel_color" in form_data:
+            profile["panel_color"] = self._sanitize_panel_color(self._dash_value(form_data, "panel_color"))
+        if "panel_footer" in form_data:
+            profile["panel_footer"] = self._clean_modal_text(self._dash_value(form_data, "panel_footer"), 2048) or "TicketHub"
+        if "panel_image_url" in form_data:
+            profile["panel_image_url"] = self._dash_value(form_data, "panel_image_url").strip() or None
+        if "panel_thumbnail_url" in form_data:
+            profile["panel_thumbnail_url"] = self._dash_value(form_data, "panel_thumbnail_url").strip() or None
+        if "panel_show_details" in form_data:
+            profile["panel_show_details"] = self._dash_bool(form_data, "panel_show_details")
+        if "panel_button_label" in form_data:
+            profile["panel_button_label"] = (
+                self._clean_modal_text(self._dash_value(form_data, "panel_button_label"), 80) or "Open Ticket"
+            )
+        if "panel_button_emoji" in form_data:
+            profile["panel_button_emoji"] = (
+                self._dash_value(form_data, "panel_button_emoji").strip() or DEFAULT_PANEL_BUTTON_EMOJI
+            )
+        if "panel_button_style" in form_data:
+            profile["panel_button_style"] = self._parse_button_style(
+                self._dash_value(form_data, "panel_button_style", "primary"),
+            )
+        if "panel_dropdown_placeholder" in form_data:
+            profile["panel_dropdown_placeholder"] = (
+                self._clean_modal_text(self._dash_value(form_data, "panel_dropdown_placeholder"), 100) or "Open a ticket..."
+            )
+        if "panel_dropdown_label" in form_data:
+            profile["panel_dropdown_label"] = (
+                self._clean_modal_text(self._dash_value(form_data, "panel_dropdown_label"), 100)
+                or profile.get("panel_button_label")
+                or "Open Ticket"
+            )
+        if "panel_dropdown_emoji" in form_data:
+            profile["panel_dropdown_emoji"] = (
+                self._dash_value(form_data, "panel_dropdown_emoji").strip()
+                or profile.get("panel_button_emoji")
+                or DEFAULT_PANEL_BUTTON_EMOJI
+            )
+        if "panel_dropdown_description" in form_data:
+            profile["panel_dropdown_description"] = (
+                self._clean_modal_text(self._dash_value(form_data, "panel_dropdown_description"), 100) or None
+            )
         profile["welcome_message"] = self._clean_modal_text(
             self._dash_value(form_data, "welcome_message"),
             1900,
@@ -960,11 +1026,93 @@ class DashboardIntegration:
             configured[action] = value
         profile["control_emojis"] = configured
 
+        submitted_buttons = []
+        for i in range(10):
+            id_key = f"btn_{i}_id"
+            if id_key not in form_data:
+                continue
+            btn_id = self._dash_value(form_data, id_key).strip().lower() or f"btn_{i + 1}"
+            enabled = self._dash_bool(form_data, f"btn_{i}_enabled")
+            action = self._dash_value(form_data, f"btn_{i}_action", "claim_toggle")
+            label = self._clean_modal_text(self._dash_value(form_data, f"btn_{i}_label"), 80) or ""
+            emoji_raw = self._dash_value(form_data, f"btn_{i}_emoji").strip()
+            emoji = emoji_raw or None
+            style = self._parse_button_style(self._dash_value(form_data, f"btn_{i}_style", "secondary"))
+            alt_label = self._clean_modal_text(self._dash_value(form_data, f"btn_{i}_alt_label"), 80) or None
+            alt_emoji_raw = self._dash_value(form_data, f"btn_{i}_alt_emoji").strip()
+            alt_emoji = alt_emoji_raw or None
+            alt_style_raw = self._dash_value(form_data, f"btn_{i}_alt_style")
+            alt_style = self._parse_button_style(alt_style_raw) if alt_style_raw else None
+            visibility = self._dash_value(form_data, f"btn_{i}_visibility", "open")
+            if visibility not in {"open", "closed", "always"}:
+                visibility = "open"
+            row_raw = self._dash_value(form_data, f"btn_{i}_row")
+            try:
+                row_val = max(0, min(int(row_raw), 4)) if row_raw != "" and row_raw is not None else None
+            except (ValueError, TypeError):
+                row_val = None
+
+            allowed_groups = []
+            for grp in ("support", "admin", "owner", "claimed_by", "participants", "everyone"):
+                if self._dash_bool(form_data, f"btn_{i}_group_{grp}"):
+                    allowed_groups.append(grp)
+
+            def _clean_ids_from_form(key):
+                res = []
+                for val in self._dash_values(form_data, key):
+                    with contextlib.suppress(ValueError, TypeError):
+                        res.append(int(val))
+                return sorted(set(res))
+
+            allowed_roles = _clean_ids_from_form(f"btn_{i}_allowed_roles")
+            action_roles = _clean_ids_from_form(f"btn_{i}_action_roles")
+            action_message = self._dash_value(form_data, f"btn_{i}_action_message").strip()[:2000]
+            action_embed_title = self._clean_modal_text(self._dash_value(form_data, f"btn_{i}_action_embed_title"), 256) or None
+            ephemeral = self._dash_bool(form_data, f"btn_{i}_ephemeral")
+
+            submitted_buttons.append(
+                {
+                    "id": btn_id,
+                    "action": action,
+                    "enabled": enabled,
+                    "label": label,
+                    "emoji": emoji,
+                    "style": style,
+                    "alt_label": alt_label,
+                    "alt_emoji": alt_emoji,
+                    "alt_style": alt_style,
+                    "visibility": visibility,
+                    "row": row_val,
+                    "allowed_groups": allowed_groups,
+                    "allowed_role_ids": allowed_roles,
+                    "action_message": action_message,
+                    "action_embed_title": action_embed_title,
+                    "action_role_ids": action_roles,
+                    "ephemeral_response": ephemeral,
+                }
+            )
+
+        if submitted_buttons:
+            profile["control_buttons"] = self._sanitize_control_buttons(submitted_buttons)
+            emojis = dict(profile.get("control_emojis") or {})
+            for b in profile["control_buttons"]:
+                b_id = b["id"]
+                b_action = b["action"]
+                if b_id in {"claim", "lock", "close", "members", "transcript", "delete"} and b.get("emoji"):
+                    emojis[b_id] = b["emoji"]
+                if b_action == "claim_toggle" and b.get("alt_emoji"):
+                    emojis["unclaim"] = b["alt_emoji"]
+                elif b_action == "lock_toggle" and b.get("alt_emoji"):
+                    emojis["unlock"] = b["alt_emoji"]
+                elif b_action in {"close_toggle", "close_reason", "close_confirm", "close_now"} and b.get("alt_emoji"):
+                    emojis["reopen"] = b["alt_emoji"]
+            profile["control_emojis"] = emojis
+
         await self._set_profile(guild, profile_name, profile)
         await self._dashboard_refresh_profile_panel(guild, profile_name, profile)
 
         tickets = await self.config.guild(guild).tickets()
-        if configured != old_emojis or profile["control_mode"] != old_control_mode:
+        if configured != old_emojis or profile["control_mode"] != old_control_mode or submitted_buttons:
             for record in tickets.values():
                 if str(record.get("profile") or "main") == profile_name:
                     await self._update_ticket_message(guild, record, profile)
@@ -1812,6 +1960,11 @@ class DashboardIntegration:
             .th-modal-card.is-disabled {{ opacity: 0.65; border-color: #2a3441; }}
             .th-modal-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }}
             .th-modal-badge {{ font-size: 0.75rem; text-transform: none; color: #9ca3af; }}
+            .th-btn-card {{ transition: opacity 0.2s ease; margin-bottom: 12px; }}
+            .th-btn-card.is-disabled {{ opacity: 0.65; border-color: #2a3441; }}
+            .th-btn-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }}
+            .th-btn-badge {{ font-size: 0.75rem; text-transform: none; color: #9ca3af; }}
+
         </style>
         <div class="th-wrap" data-dashboard-tabs="1">
             <div class="th-card">
@@ -1938,14 +2091,6 @@ class DashboardIntegration:
                 ("blacklist_role_ids", "Blacklist Roles"),
             )
         )
-        emoji_fields = "".join(
-            self._input(
-                f"emoji_{action}",
-                f"{action.title()} Emoji",
-                (profile.get("control_emojis") or {}).get(action) or default,
-            )
-            for action, default in self._default_profile()["control_emojis"].items()
-        )
         return f"""
         <div id="profile" class="th-card">
             <h3>Profile: {self._h(profile_name)}</h3>
@@ -1986,11 +2131,6 @@ class DashboardIntegration:
         }{self._option("text", "Text commands", profile.get("control_mode"))}{
             self._option("reaction", "Emoji reactions", profile.get("control_mode"))
         }</select></div>
-                    <div class="th-field"><label>Panel Style</label><select name="panel_style">{
-            self._option("button", "Button", profile.get("panel_style"))
-        }{self._option("dropdown", "Dropdown", profile.get("panel_style"))}{
-            self._option("text", "Text commands", profile.get("panel_style"))
-        }{self._option("reaction", "Emoji reactions", profile.get("panel_style"))}</select></div>
                     <div class="th-field"><label>Ticket Mode</label><select name="ticket_mode">{
             self._option("channel", "Channel", profile.get("ticket_mode"))
         }{self._option("thread", "Thread", profile.get("ticket_mode"))}</select></div>
@@ -2036,10 +2176,6 @@ class DashboardIntegration:
                     {
             self._input("channel_name", "Channel Name Template", profile.get("channel_name") or "ticket-{id}-{owner_name}")
         }
-                    {self._input("panel_message_id", "Tracked Panel Message ID", profile.get("panel_message_id") or "")}
-                </div>
-                <div class="th-row">
-                    {self._channel_select(guild, "panel_channel_id", "Panel Channel", profile.get("panel_channel_id"))}
                     {self._category_select(guild, "ticket_category_id", "Open Category", profile.get("ticket_category_id"))}
                     {self._category_select(guild, "closed_category_id", "Closed Category", profile.get("closed_category_id"))}
                     {
@@ -2051,65 +2187,6 @@ class DashboardIntegration:
         }
                     {self._role_select(guild, "ticket_role_id", "Ticket Role", profile.get("ticket_role_id"))}
                 </div>
-                <h3>Panel Appearance</h3>
-                <div class="th-row">
-                    {self._textarea("panel_title", "Panel Title", profile.get("panel_title") or "Need Help?", rows=2)}
-                    {self._textarea("panel_message", "Panel Message", profile.get("panel_message") or "", rows=2)}
-                    {
-            self._input(
-                "panel_color",
-                "Embed Color (Hex, e.g. #5865F2)",
-                self._color_hex(profile.get("panel_color")) if profile.get("panel_color") is not None else "",
-            )
-        }
-                    {self._input("panel_footer", "Footer Text", profile.get("panel_footer") or "TicketHub")}
-                </div>
-                <div class="th-row">
-                    {
-            self._input(
-                "panel_thumbnail_url",
-                "Thumbnail URL (optional, defaults to server icon)",
-                profile.get("panel_thumbnail_url") or "",
-            )
-        }
-                    {self._input("panel_image_url", "Main Image URL (optional)", profile.get("panel_image_url") or "")}
-                    <label class="th-check"><input type="checkbox" name="panel_show_details" value="1" {
-            self._checked(profile.get("panel_show_details", True))
-        }> Show Profile & Max Open in Embed</label>
-                </div>
-                <div class="th-row">
-                    {self._input("panel_button_label", "Button Label", profile.get("panel_button_label") or "Open Ticket")}
-                    {
-            self._input("panel_button_emoji", "Button Emoji", profile.get("panel_button_emoji") or DEFAULT_PANEL_BUTTON_EMOJI)
-        }
-                    <div class="th-field"><label>Button Style</label><select name="panel_button_style">{
-            self._option("primary", "Primary (Blurple)", profile.get("panel_button_style", "primary"))
-        }{self._option("secondary", "Secondary (Grey)", profile.get("panel_button_style"))}{
-            self._option("success", "Success (Green)", profile.get("panel_button_style"))
-        }{self._option("danger", "Danger (Red)", profile.get("panel_button_style"))}</select></div>
-                </div>
-                <div class="th-row">
-                    {
-            self._input(
-                "panel_dropdown_placeholder",
-                "Dropdown Placeholder",
-                profile.get("panel_dropdown_placeholder") or "Open a ticket...",
-            )
-        }
-                    {
-            self._input("panel_dropdown_label", "Dropdown Option Label", profile.get("panel_dropdown_label") or "Open Ticket")
-        }
-                    {
-            self._input(
-                "panel_dropdown_emoji", "Dropdown Option Emoji", profile.get("panel_dropdown_emoji") or DEFAULT_PANEL_BUTTON_EMOJI
-            )
-        }
-                    {
-            self._input(
-                "panel_dropdown_description", "Dropdown Option Description", profile.get("panel_dropdown_description") or ""
-            )
-        }
-                </div>
                 <h3>Messages</h3>
                 <div class="th-row">
                     {self._textarea("welcome_message", "Welcome Message", profile.get("welcome_message") or "", rows=3)}
@@ -2117,12 +2194,181 @@ class DashboardIntegration:
                 </div>
                 <h3>Roles</h3>
                 <div class="th-row">{role_fields}</div>
-                <h3>Control Emojis</h3>
-                <div class="th-row">{emoji_fields}</div>
+                <h3>Ticket Control Buttons</h3>
+                <p class="th-muted">Configure appearance, actions, visibility, and permissions for ticket buttons.</p>
+                {self._dashboard_control_buttons_section(guild, profile)}
                 <button class="th-btn" type="submit">Save Profile</button>
             </form>
         </div>
         """
+
+    def _dashboard_button_action_options(self, action: str) -> str:
+        builtin_actions = [
+            ("claim_toggle", "Claim / Unclaim Toggle"),
+            ("claim", "Claim Only"),
+            ("unclaim", "Unclaim Only"),
+            ("lock_toggle", "Lock / Unlock Toggle"),
+            ("lock", "Lock Only"),
+            ("unlock", "Unlock Only"),
+            ("close_toggle", "Close / Reopen Toggle"),
+            ("close_reason", "Close with Reason (Modal)"),
+            ("close_confirm", "Close with Confirmation"),
+            ("close_now", "Instant Close"),
+            ("reopen", "Reopen with Reason (Modal)"),
+            ("reopen_now", "Instant Reopen"),
+            ("members", "Manage Members"),
+            ("transcript", "Transcript Bundle"),
+            ("delete", "Delete Ticket Channel"),
+        ]
+        custom_actions = [
+            ("send_message", "Send Canned Message / Embed"),
+            ("ping_roles", "Ping Roles"),
+            ("toggle_role", "Toggle Member Role"),
+        ]
+        return (
+            '<optgroup label="Built-in Actions">'
+            + "".join(self._option(val, desc, action) for val, desc in builtin_actions)
+            + '</optgroup><optgroup label="Custom Actions">'
+            + "".join(self._option(val, desc, action) for val, desc in custom_actions)
+            + "</optgroup>"
+        )
+
+    def _dashboard_button_permission_fields(
+        self,
+        guild: discord.Guild,
+        index: int,
+        allowed_groups: set[str],
+        allowed_roles: list[int],
+    ) -> str:
+        group_checks = "".join(
+            f'<label class="th-check"><input type="checkbox" name="btn_{index}_group_{grp}" value="1" '
+            f"{self._checked(grp in allowed_groups)}> {glbl}</label>"
+            for grp, glbl in [
+                ("support", "Support Roles"),
+                ("admin", "Administrators"),
+                ("owner", "Ticket Owner"),
+                ("claimed_by", "Claimed Staff"),
+                ("participants", "Added Members"),
+                ("everyone", "Everyone"),
+            ]
+        )
+        return f"""
+        <h4>Permissions</h4>
+        <div class="th-row">
+            <div>
+                <label class="th-muted">Allowed Permission Groups (if none selected, action defaults apply):</label>
+                <div class="th-grid" style="margin-top: 6px;">{group_checks}</div>
+            </div>
+            {self._multi_role_select(guild, f"btn_{index}_allowed_roles", "Additional Allowed Roles", allowed_roles)}
+        </div>
+        """
+
+    def _dashboard_control_button_card(
+        self,
+        guild: discord.Guild,
+        index: int,
+        btn: dict[str, typing.Any],
+    ) -> str:
+        btn_id = btn.get("id") or f"custom_{index + 1}"
+        enabled = btn.get("enabled", False)
+        action = btn.get("action", "claim_toggle" if index == 0 else "send_message")
+        label = btn.get("label", "")
+        emoji = btn.get("emoji", "")
+        style = btn.get("style", "secondary")
+        alt_label = btn.get("alt_label", "")
+        alt_emoji = btn.get("alt_emoji", "")
+        alt_style = btn.get("alt_style", "secondary")
+        visibility = btn.get("visibility", "open")
+        row = "" if btn.get("row") is None else str(btn.get("row"))
+        allowed_groups = set(btn.get("allowed_groups") or [])
+        allowed_roles = btn.get("allowed_role_ids") or []
+        action_roles = btn.get("action_role_ids") or []
+        action_msg = btn.get("action_message", "")
+        action_embed_title = btn.get("action_embed_title", "")
+        ephemeral = btn.get("ephemeral_response", False)
+
+        summary_text = f"{self._h(label or btn_id)} • {self._h(action)}" if enabled else "Disabled"
+        action_opts = self._dashboard_button_action_options(action)
+        perm_html = self._dashboard_button_permission_fields(guild, index, allowed_groups, allowed_roles)
+
+        return f"""
+        <div class="th-card th-btn-card{" is-disabled" if not enabled else ""}" data-btn-card="1">
+            <div class="th-btn-header">
+                <label class="th-check">
+                    <input type="checkbox" name="btn_{index}_enabled" value="1" data-btn-enabled="1"
+                    {self._checked(enabled)}> <strong>Button {index + 1}: {self._h(btn_id.title())}</strong>
+                </label>
+                <span class="th-badge th-btn-badge" data-btn-summary="1">{summary_text}</span>
+            </div>
+            <input type="hidden" name="btn_{index}_id" value="{self._h(btn_id)}">
+            <div class="th-btn-fields" data-btn-fields="1">
+                <div class="th-row">
+                    {self._input(f"btn_{index}_label", "Button Label", label)}
+                    {self._input(f"btn_{index}_emoji", "Button Emoji", emoji)}
+                    <div class="th-field"><label>Button Style</label><select name="btn_{index}_style">{
+            self._option("primary", "Primary (Blurple)", style)
+        }{self._option("secondary", "Secondary (Grey)", style)}{self._option("success", "Success (Green)", style)}{
+            self._option("danger", "Danger (Red)", style)
+        }</select></div>
+                    <div class="th-field"><label>Action</label>
+                        <select name="btn_{index}_action" data-btn-action-select="1">{action_opts}</select></div>
+                    <div class="th-field"><label>Visibility</label><select name="btn_{index}_visibility">{
+            self._option("open", "Open Tickets Only", visibility)
+        }{self._option("closed", "Closed Tickets Only", visibility)}{
+            self._option("always", "Always Visible", visibility)
+        }</select></div>
+                    <div class="th-field"><label>Row Position</label><select name="btn_{index}_row">{
+            self._option("", "Auto (Next available)", row)
+        }{self._option("0", "Row 1", row)}{self._option("1", "Row 2", row)}{self._option("2", "Row 3", row)}{
+            self._option("3", "Row 4", row)
+        }{self._option("4", "Row 5", row)}</select></div>
+                </div>
+                <div class="th-row" data-btn-field="toggle_alt">
+                    {self._input(f"btn_{index}_alt_label", "Toggled / Active Label", alt_label)}
+                    {self._input(f"btn_{index}_alt_emoji", "Toggled Emoji", alt_emoji)}
+                    <div class="th-field"><label>Toggled Style</label><select name="btn_{index}_alt_style">{
+            self._option("secondary", "Secondary (Grey)", alt_style)
+        }{self._option("primary", "Primary (Blurple)", alt_style)}{self._option("success", "Success (Green)", alt_style)}{
+            self._option("danger", "Danger (Red)", alt_style)
+        }</select></div>
+                </div>
+                <div data-btn-field="custom_action">
+                    <div class="th-row">
+                        <div data-btn-field="custom_message">
+                            {self._textarea(f"btn_{index}_action_message", "Message / Content", action_msg, rows=2)}
+                        </div>
+                        <div data-btn-field="custom_embed">
+                            {self._input(f"btn_{index}_action_embed_title", "Embed Title (optional)", action_embed_title)}
+                        </div>
+                    </div>
+                    <div class="th-row">
+                        <div data-btn-field="custom_roles">
+                            {
+            self._multi_role_select(guild, f"btn_{index}_action_roles", "Target Roles (for Ping / Toggle)", action_roles)
+        }
+                        </div>
+                        <div data-btn-field="custom_ephemeral">
+                            <label class="th-check"><input type="checkbox" name="btn_{index}_ephemeral" value="1"
+                            {self._checked(ephemeral)}> Ephemeral response (only visible to clicking user)</label>
+                        </div>
+                    </div>
+                </div>
+                {perm_html}
+            </div>
+        </div>
+        """
+
+    def _dashboard_control_buttons_section(
+        self,
+        guild: discord.Guild,
+        profile: dict[str, typing.Any],
+    ) -> str:
+        buttons = profile.get("control_buttons") or self._default_control_buttons()
+        cards = []
+        for index in range(10):
+            btn = buttons[index] if index < len(buttons) else {}
+            cards.append(self._dashboard_control_button_card(guild, index, btn))
+        return "".join(cards)
 
     def _modal_type_options(self, selected: str) -> str:
         types = [

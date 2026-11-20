@@ -308,6 +308,48 @@ class TicketMultiPanelView(discord.ui.View):
             )
 
 
+class TicketControlButton(discord.ui.Button):
+    """A button on the persistent ticket control view."""
+
+    def __init__(
+        self,
+        *,
+        button_id: str,
+        label: str | None = None,
+        emoji: str | discord.PartialEmoji | None = None,
+        style: discord.ButtonStyle = discord.ButtonStyle.secondary,
+        custom_id: str | None = None,
+        disabled: bool = False,
+        row: int | None = None,
+    ) -> None:
+        self.button_id = button_id
+        built_in_custom_ids = {
+            "claim": "taakoscogs:tickethub:claim",
+            "lock": "taakoscogs:tickethub:lock",
+            "close": "taakoscogs:tickethub:close",
+            "members": "taakoscogs:tickethub:members",
+            "transcript": "taakoscogs:tickethub:transcript",
+            "delete": "taakoscogs:tickethub:delete",
+        }
+        resolved_custom_id = custom_id or built_in_custom_ids.get(
+            button_id,
+            f"taakoscogs:tickethub:btn:{button_id}",
+        )
+        super().__init__(
+            label=label,
+            emoji=emoji,
+            style=style,
+            custom_id=resolved_custom_id,
+            disabled=disabled,
+            row=row,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view = self.view
+        if isinstance(view, TicketControlView):
+            await view.cog.handle_ticket_control_interaction(interaction, self.button_id)
+
+
 class TicketControlView(discord.ui.View):
     """Persistent view for ticket control messages."""
 
@@ -318,105 +360,79 @@ class TicketControlView(discord.ui.View):
         claimed: bool = False,
         locked: bool = False,
         closed: bool = False,
+        buttons: list[dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(timeout=None)
         self.cog = cog
-        if claimed:
-            self.claim.label = "Unclaim"
-            self.claim.emoji = "\N{OPEN LOCK}"
-            self.claim.style = discord.ButtonStyle.secondary
-        if locked:
-            self.lock.label = "Unlock"
-            self.lock.emoji = "\N{OPEN LOCK}"
-            self.lock.style = discord.ButtonStyle.success
-        if closed:
-            self.claim.disabled = True
-            self.lock.disabled = True
-            self.members.disabled = True
-            self.close.label = "Reopen"
-            self.close.emoji = "\N{OPEN HANDS SIGN}"
-            self.close.style = discord.ButtonStyle.secondary
-        else:
-            self.remove_item(self.delete)
+        self.claimed = claimed
+        self.locked = locked
+        self.closed = closed
 
-    @discord.ui.button(
-        label="Claim",
-        emoji="\N{WHITE HEAVY CHECK MARK}",
-        style=discord.ButtonStyle.success,
-        custom_id="taakoscogs:tickethub:claim",
-    )
-    async def claim(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        await self.cog.handle_ticket_button(interaction, "claim_toggle")
+        is_persistent_registration = buttons is None
+        button_defs = buttons if buttons is not None else TicketHub._persistent_button_defs()
+        self._button_map: dict[str, TicketControlButton] = {}
 
-    @discord.ui.button(
-        label="Lock",
-        emoji="\N{LOCK}",
-        style=discord.ButtonStyle.secondary,
-        custom_id="taakoscogs:tickethub:lock",
-    )
-    async def lock(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        await self.cog.handle_ticket_button(interaction, "lock_toggle")
+        for btn in button_defs:
+            if not is_persistent_registration:
+                if not btn.get("enabled", True):
+                    continue
+                vis = btn.get("visibility", "open")
+                if vis == "open" and closed:
+                    continue
+                if vis == "closed" and not closed:
+                    continue
 
-    @discord.ui.button(
-        label="Close",
-        emoji="\N{CROSS MARK}",
-        style=discord.ButtonStyle.danger,
-        custom_id="taakoscogs:tickethub:close",
-    )
-    async def close(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        await self.cog.handle_ticket_button(interaction, "close_toggle")
+            btn_id = str(btn.get("id") or "btn")
+            action = str(btn.get("action") or "claim_toggle")
+            label = btn.get("label") or btn_id.replace("_", " ").title()
+            emoji_str = btn.get("emoji")
+            style_str = btn.get("style", "secondary")
 
-    @discord.ui.button(
-        label="Members",
-        emoji="\N{BUSTS IN SILHOUETTE}",
-        style=discord.ButtonStyle.secondary,
-        custom_id="taakoscogs:tickethub:members",
-    )
-    async def members(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        await self.cog.handle_ticket_button(interaction, "members")
+            if not is_persistent_registration:
+                if action in {"claim_toggle", "claim"} and claimed:
+                    label = btn.get("alt_label") or "Unclaim"
+                    emoji_str = btn.get("alt_emoji") or "🔓"
+                    style_str = btn.get("alt_style") or "secondary"
+                elif action in {"lock_toggle", "lock"} and locked:
+                    label = btn.get("alt_label") or "Unlock"
+                    emoji_str = btn.get("alt_emoji") or "🔓"
+                    style_str = btn.get("alt_style") or "success"
+                elif action in {"close_toggle", "close_reason", "close_confirm", "close_now"} and closed:
+                    label = btn.get("alt_label") or "Reopen"
+                    emoji_str = btn.get("alt_emoji") or "👐"
+                    style_str = btn.get("alt_style") or "secondary"
 
-    @discord.ui.button(
-        label="Transcript",
-        emoji="\N{PAGE FACING UP}",
-        style=discord.ButtonStyle.secondary,
-        custom_id="taakoscogs:tickethub:transcript",
-    )
-    async def transcript(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        await self.cog.handle_ticket_button(interaction, "transcript")
+            emoji_obj = None
+            if emoji_str:
+                try:
+                    emoji_obj = discord.PartialEmoji.from_str(emoji_str)
+                except (TypeError, ValueError):
+                    emoji_obj = emoji_str
 
-    @discord.ui.button(
-        label="Delete",
-        emoji="\N{WASTEBASKET}",
-        style=discord.ButtonStyle.danger,
-        custom_id="taakoscogs:tickethub:delete",
-        row=1,
-    )
-    async def delete(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        await self.cog.handle_ticket_button(interaction, "delete")
+            style_obj = TicketHub._button_style_from_str(style_str)
+            row = btn.get("row")
+            if row is not None:
+                try:
+                    row = max(0, min(int(row), 4))
+                except (ValueError, TypeError):
+                    row = None
+
+            button_item = TicketControlButton(
+                button_id=btn_id,
+                label=label,
+                emoji=emoji_obj,
+                style=style_obj,
+                row=row,
+            )
+            self._button_map[btn_id] = button_item
+            self.add_item(button_item)
+
+        self.claim = self._button_map.get("claim")
+        self.lock = self._button_map.get("lock")
+        self.close = self._button_map.get("close")
+        self.members = self._button_map.get("members")
+        self.transcript = self._button_map.get("transcript")
+        self.delete = self._button_map.get("delete")
 
 
 class TicketMemberSelect(discord.ui.UserSelect):
@@ -1562,6 +1578,181 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
             await self._forget_deleted_ticket_location(int(guild_id), int(thread_id))
 
     @staticmethod
+    def _default_control_buttons() -> list[dict[str, Any]]:
+        return [
+            {
+                "id": "claim",
+                "action": "claim_toggle",
+                "enabled": True,
+                "label": "Claim",
+                "emoji": "✅",
+                "style": "success",
+                "alt_label": "Unclaim",
+                "alt_emoji": "🔓",
+                "alt_style": "secondary",
+                "visibility": "open",
+                "row": 0,
+                "allowed_groups": ["support", "admin"],
+                "allowed_role_ids": [],
+            },
+            {
+                "id": "lock",
+                "action": "lock_toggle",
+                "enabled": True,
+                "label": "Lock",
+                "emoji": "🔒",
+                "style": "secondary",
+                "alt_label": "Unlock",
+                "alt_emoji": "🔓",
+                "alt_style": "success",
+                "visibility": "open",
+                "row": 0,
+                "allowed_groups": ["support", "admin"],
+                "allowed_role_ids": [],
+            },
+            {
+                "id": "close",
+                "action": "close_toggle",
+                "enabled": True,
+                "label": "Close",
+                "emoji": "❌",
+                "style": "danger",
+                "alt_label": "Reopen",
+                "alt_emoji": "👐",
+                "alt_style": "secondary",
+                "visibility": "always",
+                "row": 0,
+                "allowed_groups": ["support", "admin", "owner"],
+                "allowed_role_ids": [],
+            },
+            {
+                "id": "members",
+                "action": "members",
+                "enabled": True,
+                "label": "Members",
+                "emoji": "👥",
+                "style": "secondary",
+                "alt_label": None,
+                "alt_emoji": None,
+                "alt_style": None,
+                "visibility": "open",
+                "row": 0,
+                "allowed_groups": ["support", "admin", "owner"],
+                "allowed_role_ids": [],
+            },
+            {
+                "id": "transcript",
+                "action": "transcript",
+                "enabled": True,
+                "label": "Transcript",
+                "emoji": "📄",
+                "style": "secondary",
+                "alt_label": None,
+                "alt_emoji": None,
+                "alt_style": None,
+                "visibility": "always",
+                "row": 0,
+                "allowed_groups": ["support", "admin", "owner"],
+                "allowed_role_ids": [],
+            },
+            {
+                "id": "delete",
+                "action": "delete",
+                "enabled": True,
+                "label": "Delete",
+                "emoji": "🗑️",
+                "style": "danger",
+                "alt_label": None,
+                "alt_emoji": None,
+                "alt_style": None,
+                "visibility": "closed",
+                "row": 1,
+                "allowed_groups": ["support", "admin"],
+                "allowed_role_ids": [],
+            },
+            {
+                "id": "custom_1",
+                "action": "send_message",
+                "enabled": False,
+                "label": "Custom 1",
+                "emoji": "💬",
+                "style": "primary",
+                "alt_label": None,
+                "alt_emoji": None,
+                "alt_style": None,
+                "visibility": "open",
+                "row": 2,
+                "allowed_groups": ["support", "admin"],
+                "allowed_role_ids": [],
+                "action_message": "",
+                "action_embed_title": None,
+                "action_role_ids": [],
+                "ephemeral_response": False,
+            },
+            {
+                "id": "custom_2",
+                "action": "send_message",
+                "enabled": False,
+                "label": "Custom 2",
+                "emoji": "💬",
+                "style": "primary",
+                "alt_label": None,
+                "alt_emoji": None,
+                "alt_style": None,
+                "visibility": "open",
+                "row": 2,
+                "allowed_groups": ["support", "admin"],
+                "allowed_role_ids": [],
+                "action_message": "",
+                "action_embed_title": None,
+                "action_role_ids": [],
+                "ephemeral_response": False,
+            },
+            {
+                "id": "custom_3",
+                "action": "ping_roles",
+                "enabled": False,
+                "label": "Ping Staff",
+                "emoji": "🔔",
+                "style": "secondary",
+                "alt_label": None,
+                "alt_emoji": None,
+                "alt_style": None,
+                "visibility": "open",
+                "row": 2,
+                "allowed_groups": ["support", "admin", "owner"],
+                "allowed_role_ids": [],
+                "action_message": "Staff needed in ticket!",
+                "action_embed_title": None,
+                "action_role_ids": [],
+                "ephemeral_response": False,
+            },
+            {
+                "id": "custom_4",
+                "action": "toggle_role",
+                "enabled": False,
+                "label": "Toggle VIP",
+                "emoji": "⭐",
+                "style": "secondary",
+                "alt_label": None,
+                "alt_emoji": None,
+                "alt_style": None,
+                "visibility": "open",
+                "row": 2,
+                "allowed_groups": ["support", "admin"],
+                "allowed_role_ids": [],
+                "action_message": "",
+                "action_embed_title": None,
+                "action_role_ids": [],
+                "ephemeral_response": True,
+            },
+        ]
+
+    @staticmethod
+    def _persistent_button_defs() -> list[dict[str, Any]]:
+        return TicketHub._default_control_buttons()
+
+    @staticmethod
     def _default_profile() -> ProfileRecord:
         return {
             "enabled": True,
@@ -1570,6 +1761,7 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
             "panel_style": "button",
             "form_mode": "modal",
             "control_mode": "buttons",
+            "control_buttons": TicketHub._default_control_buttons(),
             "ticket_category_id": None,
             "closed_category_id": None,
             "ticket_mode": "channel",
@@ -2018,6 +2210,152 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
         return aliases.get(clean, "primary")
 
     @staticmethod
+    def _button_style_from_str(value: Any) -> discord.ButtonStyle:
+        parsed = TicketHub._parse_button_style(value)
+        mapping = {
+            "primary": discord.ButtonStyle.primary,
+            "secondary": discord.ButtonStyle.secondary,
+            "success": discord.ButtonStyle.success,
+            "danger": discord.ButtonStyle.danger,
+        }
+        return mapping.get(parsed, discord.ButtonStyle.secondary)
+
+    @staticmethod
+    def _sanitize_control_buttons(
+        buttons: list[dict[str, Any]] | None,
+        *,
+        control_emojis: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
+        default_defs = TicketHub._default_control_buttons()
+        defaults_by_id = {b["id"]: b for b in default_defs}
+        control_emojis = control_emojis or {}
+        valid_actions = {
+            "claim_toggle",
+            "claim",
+            "unclaim",
+            "lock_toggle",
+            "lock",
+            "unlock",
+            "close_toggle",
+            "close_reason",
+            "close_confirm",
+            "close_now",
+            "reopen",
+            "reopen_now",
+            "members",
+            "transcript",
+            "delete",
+            "send_message",
+            "ping_roles",
+            "toggle_role",
+        }
+        valid_groups = {"support", "admin", "owner", "claimed_by", "participants", "everyone"}
+
+        if not buttons:
+            sanitized = []
+            for default_btn in default_defs:
+                btn = dict(default_btn)
+                b_id = btn["id"]
+                if b_id in control_emojis:
+                    btn["emoji"] = control_emojis[b_id]
+                if b_id == "claim" and "unclaim" in control_emojis:
+                    btn["alt_emoji"] = control_emojis["unclaim"]
+                elif b_id == "lock" and "unlock" in control_emojis:
+                    btn["alt_emoji"] = control_emojis["unlock"]
+                elif b_id == "close" and "reopen" in control_emojis:
+                    btn["alt_emoji"] = control_emojis["reopen"]
+                sanitized.append(btn)
+            return sanitized
+
+        sanitized, seen_ids = [], set()
+        for idx, raw in enumerate(buttons):
+            if not isinstance(raw, dict):
+                continue
+            btn_id = str(raw.get("id") or f"custom_{idx + 1}").strip().lower()
+            if not btn_id or btn_id in seen_ids:
+                btn_id = f"custom_{idx + 1}"
+            seen_ids.add(btn_id)
+
+            fallback = defaults_by_id.get(btn_id, {})
+            action = str(raw.get("action") or fallback.get("action") or "claim_toggle").strip().lower()
+            if action not in valid_actions:
+                action = fallback.get("action", "send_message")
+
+            enabled = bool(raw.get("enabled", fallback.get("enabled", True)))
+            label = str(raw.get("label") if raw.get("label") is not None else fallback.get("label", ""))[:80]
+            emoji = raw.get("emoji") if raw.get("emoji") is not None else fallback.get("emoji")
+            emoji = str(emoji).strip() or None if emoji is not None else None
+            style = TicketHub._parse_button_style(raw.get("style") or fallback.get("style", "secondary"))
+
+            alt_label = raw.get("alt_label") if raw.get("alt_label") is not None else fallback.get("alt_label")
+            alt_label = str(alt_label)[:80] if alt_label is not None else None
+            alt_emoji = raw.get("alt_emoji") if raw.get("alt_emoji") is not None else fallback.get("alt_emoji")
+            alt_emoji = str(alt_emoji).strip() or None if alt_emoji is not None else None
+            alt_style_val = raw.get("alt_style") or fallback.get("alt_style")
+            alt_style = TicketHub._parse_button_style(alt_style_val) if alt_style_val else None
+
+            visibility = str(raw.get("visibility") or fallback.get("visibility", "open")).strip().lower()
+            if visibility not in {"open", "closed", "always"}:
+                visibility = fallback.get("visibility", "open")
+
+            row_val = raw.get("row") if raw.get("row") is not None else fallback.get("row")
+            try:
+                row_val = max(0, min(int(row_val), 4)) if row_val is not None else None
+            except (ValueError, TypeError):
+                row_val = None
+
+            raw_groups = raw.get("allowed_groups")
+            if raw_groups is None:
+                raw_groups = fallback.get("allowed_groups", [])
+            allowed_groups = [str(g).strip().lower() for g in raw_groups if str(g).strip().lower() in valid_groups]
+
+            def _clean_ids(source):
+                out = []
+                for item in source or []:
+                    with contextlib.suppress(ValueError, TypeError):
+                        out.append(int(item))
+                return sorted(set(out))
+
+            raw_roles = raw.get("allowed_role_ids")
+            if raw_roles is None:
+                raw_roles = fallback.get("allowed_role_ids", [])
+            allowed_role_ids = _clean_ids(raw_roles)
+            action_role_ids = _clean_ids(raw.get("action_role_ids"))
+            action_message = str(raw.get("action_message") or "")[:2000]
+            action_embed_title = str(raw.get("action_embed_title"))[:256] if raw.get("action_embed_title") else None
+            ephemeral_response = bool(raw.get("ephemeral_response", False))
+
+            sanitized.append(
+                {
+                    "id": btn_id,
+                    "action": action,
+                    "enabled": enabled,
+                    "label": label,
+                    "emoji": emoji,
+                    "style": style,
+                    "alt_label": alt_label,
+                    "alt_emoji": alt_emoji,
+                    "alt_style": alt_style,
+                    "visibility": visibility,
+                    "row": row_val,
+                    "allowed_groups": allowed_groups,
+                    "allowed_role_ids": allowed_role_ids,
+                    "action_message": action_message,
+                    "action_embed_title": action_embed_title,
+                    "action_role_ids": action_role_ids,
+                    "ephemeral_response": ephemeral_response,
+                }
+            )
+
+        current_ids = {b["id"] for b in sanitized}
+        for def_btn in default_defs:
+            if def_btn["id"] not in current_ids and len(sanitized) < 10:
+                sanitized.append(dict(def_btn))
+                current_ids.add(def_btn["id"])
+
+        return sanitized[:10]
+
+    @staticmethod
     def _merge_profile(value: dict[str, Any] | None) -> ProfileRecord:
         profile = TicketHub._default_profile()
         if value:
@@ -2032,6 +2370,10 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
             ):
                 profile[key] = list(profile.get(key) or [])
             profile["control_emojis"] = dict(profile.get("control_emojis") or {})
+            profile["control_buttons"] = TicketHub._sanitize_control_buttons(
+                profile.get("control_buttons"),
+                control_emojis=profile.get("control_emojis"),
+            )
             profile["creating_modal"] = TicketHub._sanitize_modal_fields(
                 profile.get("creating_modal"),
             )
@@ -2055,9 +2397,7 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
                 or profile.get("panel_button_emoji")
                 or "\N{ENVELOPE WITH DOWNWARDS ARROW ABOVE}"
             )
-            profile["panel_dropdown_description"] = (
-                str(profile.get("panel_dropdown_description") or "").strip()[:100] or None
-            )
+            profile["panel_dropdown_description"] = str(profile.get("panel_dropdown_description") or "").strip()[:100] or None
             for key, default, allowed in (
                 ("form_mode", "modal", {"modal", "text", "reaction"}),
                 ("control_mode", "buttons", {"buttons", "text", "reaction"}),
@@ -3072,32 +3412,14 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
         claimed = bool(record.get("claimed_by"))
         locked = bool(record.get("locked"))
         closed = record.get("status") == "closed"
-        view = TicketControlView(
+        buttons = profile.get("control_buttons")
+        return TicketControlView(
             self,
             claimed=claimed,
             locked=locked,
             closed=closed,
+            buttons=buttons,
         )
-        defaults = self._default_profile()["control_emojis"]
-        configured = profile.get("control_emojis") or {}
-        actions = {
-            "taakoscogs:tickethub:claim": "unclaim" if claimed else "claim",
-            "taakoscogs:tickethub:lock": "unlock" if locked else "lock",
-            "taakoscogs:tickethub:close": "reopen" if closed else "close",
-            "taakoscogs:tickethub:members": "members",
-            "taakoscogs:tickethub:transcript": "transcript",
-            "taakoscogs:tickethub:delete": "delete",
-        }
-        for item in view.children:
-            action = actions.get(getattr(item, "custom_id", None))
-            if action is None or not isinstance(item, discord.ui.Button):
-                continue
-            emoji = configured.get(action) or defaults[action]
-            try:
-                item.emoji = emoji
-            except (TypeError, ValueError):
-                item.emoji = defaults[action]
-        return view
 
     def _panel_embed(
         self,
@@ -3370,182 +3692,506 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
             ephemeral=True,
         )
 
-    async def handle_ticket_button(
+    async def _safe_interaction_reply(
+        self,
+        interaction: discord.Interaction,
+        content: str | None = None,
+        *,
+        embed: discord.Embed | None = None,
+        ephemeral: bool = True,
+    ) -> None:
+        """Safely respond to an interaction whether deferred or not."""
+        try:
+            if interaction.response.is_done():
+                if content and embed:
+                    await interaction.followup.send(content, embed=embed, ephemeral=ephemeral)
+                elif embed:
+                    await interaction.followup.send(embed=embed, ephemeral=ephemeral)
+                else:
+                    await interaction.followup.send(content or "", ephemeral=ephemeral)
+            else:
+                if content and embed:
+                    await interaction.response.send_message(content, embed=embed, ephemeral=ephemeral)
+                elif embed:
+                    await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
+                else:
+                    await interaction.response.send_message(content or "", ephemeral=ephemeral)
+        except Exception:
+            log.exception("Failed to send interaction reply in TicketHub.")
+
+    def _can_use_ticket_button(
+        self,
+        member: discord.Member,
+        button: dict[str, Any],
+        profile: ProfileRecord,
+        record: TicketRecord,
+    ) -> bool:
+        """Evaluate granular per-button permissions."""
+        is_owner = member.id in getattr(self.bot, "owner_ids", set())
+        is_admin = member.guild_permissions.administrator
+        if is_owner or is_admin:
+            return True
+
+        allowed_roles = button.get("allowed_role_ids") or []
+        if allowed_roles:
+            member_role_ids = {r.id for r in getattr(member, "roles", [])}
+            if any(int(r_id) in member_role_ids for r_id in allowed_roles):
+                return True
+
+        allowed_groups = button.get("allowed_groups") or []
+        if allowed_groups:
+            if "everyone" in allowed_groups:
+                return True
+            if "admin" in allowed_groups and member.guild_permissions.manage_guild:
+                return True
+            if "support" in allowed_groups and self._is_support_member(member, profile):
+                return True
+            if "owner" in allowed_groups and member.id == int(record.get("owner_id") or 0):
+                return True
+            if "claimed_by" in allowed_groups and record.get("claimed_by") and member.id == int(record.get("claimed_by")):
+                return True
+            return bool("participants" in allowed_groups and member.id in (record.get("participants") or []))
+
+        action = button.get("action", button.get("id", ""))
+        is_support = self._is_support_member(member, profile)
+        is_ticket_owner = member.id == int(record.get("owner_id") or 0)
+
+        if action in {"claim_toggle", "claim", "unclaim", "lock_toggle", "lock", "unlock", "delete"}:
+            return is_support
+        if action in {"close_toggle", "close_reason", "close_confirm", "close_now"}:
+            return is_support or (is_ticket_owner and bool(profile.get("owner_can_close", True)))
+        if action in {"reopen", "reopen_now"}:
+            return is_support or (is_ticket_owner and bool(profile.get("owner_can_reopen", True)))
+        if action == "members":
+            return is_support or (
+                is_ticket_owner and (bool(profile.get("owner_can_add_members")) or bool(profile.get("owner_can_remove_members")))
+            )
+        if action == "transcript":
+            return is_support or is_ticket_owner
+        if action in {"send_message", "ping_roles", "toggle_role"}:
+            return is_support or is_ticket_owner
+
+        return is_support
+
+    @commands.Cog.listener()
+    async def on_interaction(self, interaction: discord.Interaction) -> None:
+        """Dynamic interaction listener for ticket control buttons."""
+        if (
+            interaction.type is not discord.InteractionType.component
+            or interaction.guild is None
+            or interaction.message is None
+            or interaction.response.is_done()
+        ):
+            return
+        data = getattr(interaction, "data", None)
+        if not isinstance(data, dict):
+            return
+        custom_id = str(data.get("custom_id") or "")
+        if not custom_id.startswith("taakoscogs:tickethub:"):
+            return
+        if custom_id in {"taakoscogs:tickethub:open", "taakoscogs:tickethub:select", "taakoscogs:tickethub:multi"}:
+            return
+        if custom_id.startswith("taakoscogs:tickethub:btn:"):
+            btn_id = custom_id[len("taakoscogs:tickethub:btn:") :]
+        else:
+            btn_id = custom_id[len("taakoscogs:tickethub:") :]
+        await self.handle_ticket_control_interaction(interaction, btn_id)
+
+    def _format_button_message(
+        self,
+        template: str | None,
+        *,
+        owner: discord.Member | None,
+        actor: discord.Member,
+        record: TicketRecord,
+        profile_name: str,
+    ) -> str:
+        if not template:
+            return ""
+        owner_name = owner.display_name if owner else "Unknown"
+        owner_mention = owner.mention if owner else f"<@{record.get('owner_id')}>"
+        values = {
+            "owner_name": owner_name,
+            "owner_mention": owner_mention,
+            "owner_id": str(record.get("owner_id") or ""),
+            "actor_name": getattr(actor, "display_name", str(actor)),
+            "actor_mention": getattr(actor, "mention", str(actor)),
+            "id": str(record.get("profile_ticket_id") or record.get("id")),
+            "ticket_id": str(record.get("profile_ticket_id") or record.get("id")),
+            "global_id": str(record.get("id")),
+            "profile": profile_name,
+        }
+        rendered = template
+        for key, val in values.items():
+            rendered = rendered.replace("{" + key + "}", val)
+        return rendered
+
+    async def _execute_ticket_custom_action(
         self,
         interaction: discord.Interaction,
         action: str,
+        button_conf: dict[str, Any],
+        profile: ProfileRecord,
+        record: TicketRecord,
     ) -> None:
-        """Handle ticket control buttons."""
-        if not interaction.guild or not isinstance(interaction.user, discord.Member):
-            await interaction.response.send_message(
-                "This button only works in a server.",
-                ephemeral=True,
+        """Handle custom ticket action buttons: send_message, ping_roles, toggle_role."""
+        guild = interaction.guild
+        assert guild is not None
+        user = interaction.user
+        assert isinstance(user, discord.Member) or getattr(user, "guild_permissions", None) is not None
+
+        owner = guild.get_member(int(record.get("owner_id") or 0))
+
+        if action == "send_message":
+            raw_text = button_conf.get("action_message") or ""
+            formatted = self._format_button_message(
+                raw_text,
+                owner=owner,
+                actor=user,
+                record=record,
+                profile_name=str(record.get("profile", "")),
             )
-            return
-        if interaction.message is None:
-            await interaction.response.send_message(
-                "I could not identify this ticket.",
-                ephemeral=True,
-            )
-            return
-        if action == "close_toggle":
-            try:
-                _key, record = await self._find_ticket_by_control_message(
-                    interaction.guild,
-                    interaction.message.id,
+            embed_title = button_conf.get("action_embed_title")
+            embed = None
+            if embed_title:
+                embed = discord.Embed(
+                    title=embed_title,
+                    description=formatted,
+                    color=self._sanitize_panel_color(profile.get("panel_color")) or self.DEFAULT_COLOR,
                 )
-                if record.get("status") == "closed":
-                    await self._validate_reopen_request(
-                        interaction.guild,
-                        record,
-                        interaction.user,
-                    )
-                else:
-                    await self._validate_close_request(
-                        interaction.guild,
-                        record,
-                        interaction.user,
-                    )
-            except commands.CommandError as error:
-                await interaction.response.send_message(str(error), ephemeral=True)
-                return
-            profile = await self._get_profile(interaction.guild, record["profile"])
-            if profile.get("form_mode", "modal") != "modal":
-                await interaction.response.send_message("Check your DMs for the optional reason.", ephemeral=True)
-                try:
-                    await self._lifecycle_without_modal(
-                        interaction.guild,
-                        record,
-                        interaction.user,
-                        "reopen" if record.get("status") == "closed" else "close",
-                    )
-                    await interaction.followup.send(
-                        "Ticket updated. Check the ticket for any close confirmation.", ephemeral=True
-                    )
-                except (commands.CommandError, discord.HTTPException, ValueError, asyncio.TimeoutError) as error:
-                    await interaction.followup.send(f"TicketHub: {error}", ephemeral=True)
-                return
-            if record.get("status") == "closed":
-                await interaction.response.send_modal(
-                    TicketReopenReasonModal(
-                        self,
-                        interaction.guild.id,
-                        int(record["id"]),
-                        interaction.user.id,
-                    ),
+            if button_conf.get("ephemeral_response"):
+                await self._safe_interaction_reply(
+                    interaction,
+                    content=None if embed else (formatted or "Action completed."),
+                    embed=embed,
+                    ephemeral=True,
                 )
             else:
-                await interaction.response.send_modal(
-                    TicketCloseReasonModal(
-                        self,
-                        interaction.guild.id,
-                        int(record["id"]),
-                        interaction.user.id,
-                    ),
+                await interaction.response.defer(ephemeral=True)
+                channel = await self._fetch_ticket_channel(guild, record)
+                if channel is not None:
+                    if embed:
+                        await channel.send(embed=embed)
+                    else:
+                        await channel.send(formatted or "Action completed.")
+                    await interaction.followup.send("Message sent into ticket.", ephemeral=True)
+                else:
+                    await interaction.followup.send("Ticket channel is unavailable.", ephemeral=True)
+
+        elif action == "ping_roles":
+            role_ids = button_conf.get("action_role_ids") or []
+            roles = [guild.get_role(int(rid)) for rid in role_ids if guild.get_role(int(rid))]
+            if not roles:
+                await self._safe_interaction_reply(interaction, "No configured ping roles exist on this server.", ephemeral=True)
+                return
+            await interaction.response.defer(ephemeral=True)
+            channel = await self._fetch_ticket_channel(guild, record)
+            if channel is None:
+                await interaction.followup.send("Ticket channel is unavailable.", ephemeral=True)
+                return
+            mentions = " ".join(r.mention for r in roles)
+            custom_text = button_conf.get("action_message") or ""
+            if custom_text:
+                rendered_text = self._format_button_message(
+                    custom_text,
+                    owner=owner,
+                    actor=user,
+                    record=record,
+                    profile_name=str(record.get("profile", "")),
                 )
-            return
-        if action == "members":
-            try:
-                _key, record = await self._find_ticket_by_control_message(
-                    interaction.guild,
-                    interaction.message.id,
-                )
-                profile = await self._get_profile(
-                    interaction.guild,
-                    str(record.get("profile") or "main"),
-                )
-                is_owner = interaction.user.id == int(record.get("owner_id") or 0)
-                if not self._is_support_member(interaction.user, profile) and not (
-                    is_owner and (profile.get("owner_can_add_members") or profile.get("owner_can_remove_members"))
-                ):
-                    raise commands.CommandError(
-                        "You do not have permission to manage this ticket's members.",
+                content = f"{mentions}\n{rendered_text}"
+            else:
+                content = f"Staff ping: {mentions}"
+            await channel.send(content, allowed_mentions=discord.AllowedMentions(roles=True))
+            await interaction.followup.send(f"Pinged {len(roles)} role(s).", ephemeral=True)
+
+        elif action == "toggle_role":
+            role_ids = button_conf.get("action_role_ids") or []
+            roles = [guild.get_role(int(rid)) for rid in role_ids if guild.get_role(int(rid))]
+            if not roles:
+                await self._safe_interaction_reply(interaction, "No configured roles exist on this server.", ephemeral=True)
+                return
+            if owner is None:
+                await self._safe_interaction_reply(interaction, "Ticket owner is no longer in this server.", ephemeral=True)
+                return
+            await interaction.response.defer(ephemeral=True)
+            added, removed = [], []
+            actor_label = getattr(user, "display_name", str(user))
+            for role in roles:
+                if role in owner.roles:
+                    await owner.remove_roles(role, reason=f"TicketHub button toggle by {actor_label}")
+                    removed.append(role.name)
+                else:
+                    await owner.add_roles(role, reason=f"TicketHub button toggle by {actor_label}")
+                    added.append(role.name)
+            res_parts = []
+            if added:
+                res_parts.append(f"Added to {owner.display_name}: {', '.join(added)}")
+            if removed:
+                res_parts.append(f"Removed from {owner.display_name}: {', '.join(removed)}")
+            res_msg = " • ".join(res_parts) or "No roles changed."
+            if not button_conf.get("ephemeral_response"):
+                channel = await self._fetch_ticket_channel(guild, record)
+                if channel:
+                    await channel.send(res_msg)
+            await interaction.followup.send(res_msg, ephemeral=True)
+
+    async def _execute_ticket_lifecycle_action(
+        self,
+        interaction: discord.Interaction,
+        action: str,
+        profile: ProfileRecord,
+        record: TicketRecord,
+    ) -> None:
+        """Handle ticket close, reopen, and member actions."""
+        guild, user = interaction.guild, interaction.user
+        assert guild is not None and (isinstance(user, discord.Member) or getattr(user, "guild_permissions", None) is not None)
+
+        if action == "close_toggle":
+            if record.get("status") == "closed":
+                await self._validate_reopen_request(guild, record, user)
+                if profile.get("form_mode", "modal") == "modal":
+                    await interaction.response.send_modal(
+                        TicketReopenReasonModal(self, guild.id, int(record["id"]), user.id),
                     )
-                if record.get("status") != "open":
-                    raise commands.CommandError(
-                        "Members can only be changed on open tickets.",
+                else:
+                    await interaction.response.defer(ephemeral=True)
+                    await self._reopen_ticket(
+                        guild, record, user, reason="Reopened from ticket controls.", permission_checked=True
                     )
-            except commands.CommandError as error:
-                await interaction.response.send_message(str(error), ephemeral=True)
+                    await interaction.followup.send("Ticket reopened.", ephemeral=True)
+            else:
+                await self._validate_close_request(guild, record, user)
+                if profile.get("form_mode", "modal") != "modal":
+                    await interaction.response.send_message("Check your DMs for the optional reason.", ephemeral=True)
+                    try:
+                        await self._lifecycle_without_modal(guild, record, user, "close")
+                        await interaction.followup.send(
+                            "Ticket updated. Check the ticket for any close confirmation.", ephemeral=True
+                        )
+                    except (commands.CommandError, discord.HTTPException, ValueError, asyncio.TimeoutError) as error:
+                        await interaction.followup.send(f"TicketHub: {error}", ephemeral=True)
+                else:
+                    await interaction.response.send_modal(TicketCloseReasonModal(self, guild.id, int(record["id"]), user.id))
+        elif action == "close_reason":
+            if record.get("status") == "closed":
+                await self._safe_interaction_reply(interaction, "This ticket is already closed.", ephemeral=True)
+                return
+            await self._validate_close_request(guild, record, user)
+            if profile.get("form_mode", "modal") == "modal":
+                await interaction.response.send_modal(TicketCloseReasonModal(self, guild.id, int(record["id"]), user.id))
+            else:
+                await self._lifecycle_without_modal(guild, record, user, "close")
+                await self._safe_interaction_reply(interaction, "Close request started. Check your DMs.", ephemeral=True)
+        elif action == "close_confirm":
+            if record.get("status") == "closed":
+                await self._safe_interaction_reply(interaction, "This ticket is already closed.", ephemeral=True)
+                return
+            await self._validate_close_request(guild, record, user)
+            await interaction.response.defer(ephemeral=True)
+            await self._start_close_confirmation(guild, record, user, "Requested from ticket controls.")
+            await interaction.followup.send("Close confirmation prompt posted.", ephemeral=True)
+        elif action == "close_now":
+            if record.get("status") == "closed":
+                await self._safe_interaction_reply(interaction, "This ticket is already closed.", ephemeral=True)
+                return
+            await self._validate_close_request(guild, record, user)
+            await interaction.response.defer(ephemeral=True)
+            await self._close_ticket(
+                guild, record, user, reason="Closed immediately via button controls.", permission_checked=True
+            )
+            await interaction.followup.send("Ticket closed.", ephemeral=True)
+        elif action == "reopen":
+            if record.get("status") != "closed":
+                await self._safe_interaction_reply(interaction, "This ticket is not closed.", ephemeral=True)
+                return
+            await self._validate_reopen_request(guild, record, user)
+            if profile.get("form_mode", "modal") == "modal":
+                await interaction.response.send_modal(TicketReopenReasonModal(self, guild.id, int(record["id"]), user.id))
+            else:
+                await interaction.response.defer(ephemeral=True)
+                await self._reopen_ticket(guild, record, user, reason="Reopened from ticket controls.", permission_checked=True)
+                await interaction.followup.send("Ticket reopened.", ephemeral=True)
+        elif action == "reopen_now":
+            if record.get("status") != "closed":
+                await self._safe_interaction_reply(interaction, "This ticket is not closed.", ephemeral=True)
+                return
+            await self._validate_reopen_request(guild, record, user)
+            await interaction.response.defer(ephemeral=True)
+            await self._reopen_ticket(
+                guild, record, user, reason="Reopened immediately via button controls.", permission_checked=True
+            )
+            await interaction.followup.send("Ticket reopened.", ephemeral=True)
+        elif action == "members":
+            if record.get("status") != "open":
+                await self._safe_interaction_reply(interaction, "Members can only be changed on open tickets.", ephemeral=True)
                 return
             participant_mentions = [
-                self._user_ref(member_id)
-                for member_id in record.get("participants", [])
-                if str(member_id) != str(record.get("owner_id"))
+                self._user_ref(mid) for mid in record.get("participants", []) if str(mid) != str(record.get("owner_id"))
             ]
             await interaction.response.send_message(
                 "Manage ticket members below.\nCurrent added members: " + (", ".join(participant_mentions) or "None"),
                 view=TicketMembersView(self, int(record["id"])),
                 ephemeral=True,
             )
+
+    async def _execute_ticket_staff_action(
+        self,
+        interaction: discord.Interaction,
+        action: str,
+        profile: ProfileRecord,
+        record: TicketRecord,
+    ) -> None:
+        """Handle staff ticket actions: claim, lock, transcript, and delete."""
+        guild, user = interaction.guild, interaction.user
+        assert guild is not None and (isinstance(user, discord.Member) or getattr(user, "guild_permissions", None) is not None)
+
+        if action == "claim_toggle":
+            await interaction.response.defer(ephemeral=True)
+            if record.get("claimed_by"):
+                await self._unclaim_ticket(guild, record, user, permission_checked=True)
+                await interaction.followup.send("Ticket unclaimed.", ephemeral=True)
+            else:
+                await self._claim_ticket(guild, record, user, permission_checked=True)
+                await interaction.followup.send("Ticket claimed.", ephemeral=True)
+        elif action == "claim":
+            await interaction.response.defer(ephemeral=True)
+            if record.get("claimed_by"):
+                await interaction.followup.send("This ticket is already claimed.", ephemeral=True)
+            else:
+                await self._claim_ticket(guild, record, user, permission_checked=True)
+                await interaction.followup.send("Ticket claimed.", ephemeral=True)
+        elif action == "unclaim":
+            await interaction.response.defer(ephemeral=True)
+            if not record.get("claimed_by"):
+                await interaction.followup.send("This ticket is not claimed.", ephemeral=True)
+            else:
+                await self._unclaim_ticket(guild, record, user, permission_checked=True)
+                await interaction.followup.send("Ticket unclaimed.", ephemeral=True)
+        elif action == "lock_toggle":
+            await interaction.response.defer(ephemeral=True)
+            if record.get("locked"):
+                await self._unlock_ticket(guild, record, user, permission_checked=True)
+                await interaction.followup.send("Ticket unlocked.", ephemeral=True)
+            else:
+                await self._lock_ticket(guild, record, user, permission_checked=True)
+                await interaction.followup.send("Ticket locked.", ephemeral=True)
+        elif action == "lock":
+            await interaction.response.defer(ephemeral=True)
+            if record.get("locked"):
+                await interaction.followup.send("This ticket is already locked.", ephemeral=True)
+            else:
+                await self._lock_ticket(guild, record, user, permission_checked=True)
+                await interaction.followup.send("Ticket locked.", ephemeral=True)
+        elif action == "unlock":
+            await interaction.response.defer(ephemeral=True)
+            if not record.get("locked"):
+                await interaction.followup.send("This ticket is not locked.", ephemeral=True)
+            else:
+                await self._unlock_ticket(guild, record, user, permission_checked=True)
+                await interaction.followup.send("Ticket unlocked.", ephemeral=True)
+        elif action == "transcript":
+            await interaction.response.defer(ephemeral=True)
+            result = await self._send_transcript_bundle(guild, record, profile, requested_by=user)
+            await interaction.followup.send(result, ephemeral=True)
+        elif action == "delete":
+            await interaction.response.defer(ephemeral=True)
+            await self._delete_ticket_channel(
+                guild, record, user, reason="Deleted from ticket controls.", permission_checked=True
+            )
+            await interaction.followup.send("Ticket deleted.", ephemeral=True)
+
+    async def handle_ticket_button(
+        self,
+        interaction: discord.Interaction,
+        action: str,
+    ) -> None:
+        """Backwards-compatible wrapper for ticket button clicks."""
+        await self.handle_ticket_control_interaction(interaction, action)
+
+    async def handle_ticket_control_interaction(
+        self,
+        interaction: discord.Interaction,
+        button_id: str,
+    ) -> None:
+        """Handle execution of built-in and custom ticket control button actions."""
+        has_member = (
+            isinstance(interaction.user, discord.Member) or getattr(interaction.user, "guild_permissions", None) is not None
+        )
+        if not interaction.guild or not has_member:
+            await self._safe_interaction_reply(interaction, "This button only works in a server.", ephemeral=True)
             return
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        if interaction.message is None:
+            await self._safe_interaction_reply(interaction, "I could not identify this ticket.", ephemeral=True)
+            return
+
+        record = None
         try:
-            _key, record = await self._find_ticket_by_control_message(
-                interaction.guild,
-                interaction.message.id,
+            _key, record = await self._find_ticket_by_control_message(interaction.guild, interaction.message.id)
+        except commands.CommandError:
+            try:
+                record = await self._get_ticket_record_by_channel(interaction.guild, interaction.channel)
+            except commands.CommandError:
+                await self._safe_interaction_reply(interaction, "I could not identify this ticket.", ephemeral=True)
+                return
+        if record is None:
+            await self._safe_interaction_reply(interaction, "I could not identify this ticket.", ephemeral=True)
+            return
+
+        profile = await self._get_profile(interaction.guild, str(record.get("profile") or "main"))
+        buttons = profile.get("control_buttons") or self._default_control_buttons()
+        button_conf = None
+        for b in buttons:
+            if b.get("id") == button_id:
+                button_conf = b
+                break
+        if button_conf is None:
+            legacy_map = {
+                "claim_toggle": "claim",
+                "claim": "claim",
+                "unclaim": "claim",
+                "lock_toggle": "lock",
+                "lock": "lock",
+                "unlock": "lock",
+                "close_toggle": "close",
+                "close": "close",
+                "reopen": "close",
+                "members": "members",
+                "transcript": "transcript",
+                "delete": "delete",
+            }
+            target_id = legacy_map.get(button_id, button_id)
+            for b in buttons:
+                if b.get("id") == target_id or b.get("action") == button_id:
+                    button_conf = b
+                    break
+        if button_conf is None:
+            button_conf = {
+                "id": button_id,
+                "action": button_id,
+                "enabled": True,
+                "allowed_groups": [],
+                "allowed_role_ids": [],
+            }
+
+        if not self._can_use_ticket_button(interaction.user, button_conf, profile, record):
+            await self._safe_interaction_reply(
+                interaction,
+                "You do not have permission to use this button.",
+                ephemeral=True,
             )
-            profile = await self._get_profile(
-                interaction.guild,
-                str(record.get("profile") or "main"),
-            )
-            if action == "claim_toggle":
-                if record.get("claimed_by"):
-                    await self._unclaim_ticket(
-                        interaction.guild,
-                        record,
-                        interaction.user,
-                    )
-                    await interaction.followup.send("Ticket unclaimed.", ephemeral=True)
-                else:
-                    await self._claim_ticket(
-                        interaction.guild,
-                        record,
-                        interaction.user,
-                    )
-                    await interaction.followup.send("Ticket claimed.", ephemeral=True)
-            elif action == "lock_toggle":
-                if record.get("locked"):
-                    await self._unlock_ticket(
-                        interaction.guild,
-                        record,
-                        interaction.user,
-                    )
-                    await interaction.followup.send("Ticket unlocked.", ephemeral=True)
-                else:
-                    await self._lock_ticket(
-                        interaction.guild,
-                        record,
-                        interaction.user,
-                    )
-                    await interaction.followup.send("Ticket locked.", ephemeral=True)
-            elif action == "transcript":
-                if not self._is_support_member(
-                    interaction.user,
-                    profile,
-                ) and interaction.user.id != int(record.get("owner_id") or 0):
-                    await interaction.followup.send(
-                        "Only the ticket owner or support staff can generate transcripts.",
-                        ephemeral=True,
-                    )
-                    return
-                result = await self._send_transcript_bundle(
-                    interaction.guild,
-                    record,
-                    profile,
-                    requested_by=interaction.user,
-                )
-                await interaction.followup.send(result, ephemeral=True)
-            elif action == "delete":
-                await self._delete_ticket_channel(
-                    interaction.guild,
-                    record,
-                    interaction.user,
-                    reason="Deleted from ticket controls.",
-                )
-                await interaction.followup.send("Ticket deleted.", ephemeral=True)
+            return
+
+        action = str(button_conf.get("action") or button_id)
+        try:
+            if action in {"send_message", "ping_roles", "toggle_role"}:
+                await self._execute_ticket_custom_action(interaction, action, button_conf, profile, record)
+            elif action in {"close_toggle", "close_reason", "close_confirm", "close_now", "reopen", "reopen_now", "members"}:
+                await self._execute_ticket_lifecycle_action(interaction, action, profile, record)
+            else:
+                await self._execute_ticket_staff_action(interaction, action, profile, record)
         except commands.CommandError as error:
-            await interaction.followup.send(str(error), ephemeral=True)
+            await self._safe_interaction_reply(interaction, str(error), ephemeral=True)
 
     async def _create_ticket(
         self,
@@ -4135,9 +4781,11 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
         guild: discord.Guild,
         record: TicketRecord,
         member: discord.Member,
+        *,
+        permission_checked: bool = False,
     ) -> None:
         profile = await self._get_profile(guild, str(record.get("profile") or "main"))
-        if not self._is_support_member(member, profile):
+        if not permission_checked and not self._is_support_member(member, profile):
             raise commands.CommandError("Only support staff can claim tickets.")
         if record.get("status") != "open":
             raise commands.CommandError("Only open tickets can be claimed.")
@@ -4165,9 +4813,11 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
         guild: discord.Guild,
         record: TicketRecord,
         member: discord.Member,
+        *,
+        permission_checked: bool = False,
     ) -> None:
         profile = await self._get_profile(guild, str(record.get("profile") or "main"))
-        if not self._is_support_member(member, profile):
+        if not permission_checked and not self._is_support_member(member, profile):
             raise commands.CommandError("Only support staff can unclaim tickets.")
         if record.get("status") != "open":
             raise commands.CommandError("Only open tickets can be unclaimed.")
@@ -4195,9 +4845,11 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
         guild: discord.Guild,
         record: TicketRecord,
         member: discord.Member,
+        *,
+        permission_checked: bool = False,
     ) -> None:
         profile = await self._get_profile(guild, str(record.get("profile") or "main"))
-        if not self._is_support_member(member, profile):
+        if not permission_checked and not self._is_support_member(member, profile):
             raise commands.CommandError("Only support staff can lock tickets.")
         if record.get("status") != "open":
             raise commands.CommandError("Only open tickets can be locked.")
@@ -4234,9 +4886,11 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
         guild: discord.Guild,
         record: TicketRecord,
         member: discord.Member,
+        *,
+        permission_checked: bool = False,
     ) -> None:
         profile = await self._get_profile(guild, str(record.get("profile") or "main"))
-        if not self._is_support_member(member, profile):
+        if not permission_checked and not self._is_support_member(member, profile):
             raise commands.CommandError("Only support staff can unlock tickets.")
         if record.get("status") != "open":
             raise commands.CommandError("Only open tickets can be unlocked.")
@@ -5127,8 +5781,14 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
         member: discord.Member,
         *,
         reason: str | None = None,
+        permission_checked: bool = False,
     ) -> None:
-        profile = await self._validate_reopen_request(guild, record, member)
+        if permission_checked:
+            profile = await self._get_profile(guild, str(record.get("profile") or "main"))
+            if record.get("status") == "open":
+                raise commands.CommandError("This ticket is already open.")
+        else:
+            profile = await self._validate_reopen_request(guild, record, member)
         owner = guild.get_member(int(record["owner_id"])) if record.get("owner_id") else None
 
         record["status"] = "open"
