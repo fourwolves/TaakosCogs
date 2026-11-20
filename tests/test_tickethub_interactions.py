@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import discord
 import pytest
@@ -863,11 +863,17 @@ def test_dashboard_profile_section_excludes_panel_fields():
     assert 'name="panel_dropdown_placeholder"' not in html
 
     assert "Ticket Control Buttons" in html
-    assert 'data-btn-card="1"' in html
-    assert 'data-btn-enabled="1"' in html
-    assert 'data-btn-action-select="1"' in html
-    assert "btn_0_id" in html
-    assert "btn_0_action" in html
+    assert 'name="slot_0_button"' in html
+    assert 'name="slot_1_button"' in html
+    assert "Control Buttons" in html
+
+    # Stored button cards live in the Control Buttons tab
+    btn_html = instance._dashboard_buttons_tab(guild, instance._default_stored_buttons(), "<csrf>")
+    assert 'data-btn-card="1"' in btn_html
+    assert 'data-btn-action-select="1"' in btn_html
+    assert 'name="action" value="create_control_button"' in btn_html
+    assert 'name="action" value="save_control_button"' in btn_html
+    assert 'name="action" value="reset_control_buttons"' in btn_html
 
 
 def test_dashboard_save_profile_preserves_panel_configuration():
@@ -905,6 +911,8 @@ def test_dashboard_save_profile_preserves_panel_configuration():
         assert profile["panel_style"] == "dropdown"
         assert profile["panel_button_label"] == "Click Here"
         assert profile["channel_name"] == "ticket-{id}"
+        # Panel refresh should not be called when no panel fields were submitted
+        instance._dashboard_refresh_profile_panel.assert_not_called()
 
     asyncio.run(run())
 
@@ -1239,3 +1247,266 @@ def test_dynamic_on_interaction_listener():
         instance.handle_ticket_control_interaction.assert_not_awaited()
 
     asyncio.run(run())
+
+
+def test_dashboard_refresh_profile_panel_preserves_view_when_not_updating_view():
+    async def run():
+        instance = cog()
+        guild = SimpleNamespace(id=1, name="Test Guild", icon=None)
+        profile = instance._default_profile()
+        profile["panel_channel_id"] = 100
+        profile["panel_message_id"] = 200
+        profile["panel_button_label"] = "Custom Label"
+
+        mock_msg = SimpleNamespace(edit=AsyncMock())
+        instance._dashboard_fetch_message = AsyncMock(return_value=mock_msg)
+        instance._panel_embed = MagicMock(return_value=discord.Embed(title="Panel"))
+        instance._panel_view_for_style = MagicMock()
+        instance._alternative_panel = AsyncMock()
+
+        await instance._dashboard_refresh_profile_panel(guild, "main", profile, update_view=False)
+        mock_msg.edit.assert_awaited_once()
+        assert "view" not in mock_msg.edit.call_args.kwargs
+        assert mock_msg.edit.call_args.kwargs["embed"] is not None
+        instance._panel_view_for_style.assert_not_called()
+        instance._alternative_panel.assert_not_called()
+
+    asyncio.run(run())
+
+
+def test_dashboard_refresh_profile_panel_passes_profile_when_updating_view():
+    async def run():
+        instance = cog()
+        guild = SimpleNamespace(id=1, name="Test Guild", icon=None)
+        profile = instance._default_profile()
+        profile["panel_channel_id"] = 100
+        profile["panel_message_id"] = 200
+        profile["panel_button_label"] = "Custom Label"
+        profile["panel_style"] = "button"
+
+        mock_msg = SimpleNamespace(edit=AsyncMock())
+        mock_view = object()
+        instance._dashboard_fetch_message = AsyncMock(return_value=mock_msg)
+        instance._panel_embed = MagicMock(return_value=discord.Embed(title="Panel"))
+        instance._panel_view_for_style = MagicMock(return_value=mock_view)
+        instance._alternative_panel = AsyncMock()
+
+        await instance._dashboard_refresh_profile_panel(guild, "main", profile, update_view=True)
+        mock_msg.edit.assert_awaited_once()
+        assert mock_msg.edit.call_args.kwargs["view"] is mock_view
+        instance._panel_view_for_style.assert_called_once_with("button", profile=profile)
+        instance._alternative_panel.assert_awaited_once()
+
+    asyncio.run(run())
+
+
+def test_dashboard_save_profile_panel_refresh_guard():
+    async def run():
+        instance = cog()
+        profile = instance._default_profile()
+        guild = SimpleNamespace(id=1)
+
+        instance._ensure_profile = AsyncMock(return_value=profile)
+        instance._set_profile = AsyncMock()
+        instance._dashboard_refresh_profile_panel = AsyncMock()
+        instance.config = SimpleNamespace(
+            guild=lambda _: SimpleNamespace(
+                tickets=AsyncMock(return_value={}),
+            )
+        )
+
+        await instance._dashboard_save_profile(guild, {"selected_profile": "main", "channel_name": "t-{id}"})
+        instance._dashboard_refresh_profile_panel.assert_not_called()
+
+        await instance._dashboard_save_profile(guild, {"selected_profile": "main", "panel_title": "New Title"})
+        instance._dashboard_refresh_profile_panel.assert_awaited_once_with(guild, "main", profile, update_view=False)
+        instance._dashboard_refresh_profile_panel.reset_mock()
+
+        await instance._dashboard_save_profile(guild, {"selected_profile": "main", "panel_button_label": "New Button"})
+        instance._dashboard_refresh_profile_panel.assert_awaited_once_with(guild, "main", profile, update_view=True)
+
+    asyncio.run(run())
+
+
+def test_stored_buttons_crud_and_profile_sync():
+    async def run():
+        instance = cog()
+        guild = SimpleNamespace(id=1)
+        cfg_buttons = {}
+
+        custom_buttons_mock = AsyncMock(side_effect=lambda: dict(cfg_buttons))
+        custom_buttons_mock.set = AsyncMock(side_effect=lambda v: (cfg_buttons.clear(), cfg_buttons.update(v)))
+
+        instance.config = SimpleNamespace(
+            guild=lambda _: SimpleNamespace(
+                custom_buttons=custom_buttons_mock,
+                tickets=AsyncMock(return_value={}),
+            )
+        )
+
+        main_profile = instance._default_profile()
+        profiles_store = {"main": main_profile}
+        instance._get_profiles = AsyncMock(return_value=profiles_store)
+        instance._set_profile = AsyncMock(side_effect=lambda g, name, p: profiles_store.update({name: p}))
+        instance._update_ticket_message = AsyncMock()
+
+        # 1. Get stored buttons initializes with defaults
+        stored = await instance._get_stored_buttons(guild)
+        assert "claim" in stored
+        assert "lock" in stored
+        assert "close" in stored
+
+        # 2. Save/update a button definition (e.g. modify claim label)
+        modified_claim = dict(stored["claim"])
+        modified_claim["label"] = "I Got This!"
+        modified_claim["style"] = "primary"
+        await instance._save_stored_button(guild, modified_claim)
+
+        updated_stored = await instance._get_stored_buttons(guild)
+        assert updated_stored["claim"]["label"] == "I Got This!"
+        assert updated_stored["claim"]["style"] == "primary"
+
+        # Check sync to profile
+        profile_claim = next(b for b in profiles_store["main"]["control_buttons"] if b["id"] == "claim")
+        assert profile_claim["label"] == "I Got This!"
+        assert profile_claim["style"] == "primary"
+
+        # 3. Create a custom button
+        custom_btn = {
+            "id": "escalate",
+            "action": "send_message",
+            "label": "Escalate to Tier 2",
+            "style": "danger",
+            "action_message": "Ticket escalated!",
+        }
+        await instance._save_stored_button(guild, custom_btn)
+        stored_after_create = await instance._get_stored_buttons(guild)
+        assert "escalate" in stored_after_create
+        assert stored_after_create["escalate"]["label"] == "Escalate to Tier 2"
+
+        # 4. Delete custom button
+        await instance._delete_stored_button(guild, "escalate")
+        stored_after_del = await instance._get_stored_buttons(guild)
+        assert "escalate" not in stored_after_del
+
+        # 5. Delete built-in button resets it to default
+        await instance._delete_stored_button(guild, "claim")
+        stored_after_reset_claim = await instance._get_stored_buttons(guild)
+        assert stored_after_reset_claim["claim"]["label"] == "Claim"
+
+        # 6. Reset all stored buttons
+        await instance._reset_stored_buttons(guild)
+
+    asyncio.run(run())
+
+
+def test_dashboard_save_profile_slot_assignment():
+    async def run():
+        instance = cog()
+        guild = SimpleNamespace(id=1)
+        profile = instance._default_profile()
+        stored_buttons = instance._default_stored_buttons()
+
+        instance._ensure_profile = AsyncMock(return_value=profile)
+        instance._set_profile = AsyncMock()
+        instance._get_stored_buttons = AsyncMock(return_value=stored_buttons)
+        instance.config = SimpleNamespace(
+            guild=lambda _: SimpleNamespace(
+                tickets=AsyncMock(return_value={}),
+            )
+        )
+
+        form_data = {
+            "selected_profile": "main",
+            "slot_0_button": "lock",
+            "slot_1_button": "claim",
+            "slot_2_button": "close",
+            "slot_3_button": "",
+            "slot_4_button": "",
+            "slot_5_button": "",
+            "slot_6_button": "",
+            "slot_7_button": "",
+            "slot_8_button": "",
+            "slot_9_button": "",
+        }
+
+        await instance._dashboard_save_profile(guild, form_data)
+        buttons = profile["control_buttons"]
+        assert len(buttons) == 10
+        assert buttons[0]["id"] == "lock"
+        assert buttons[0]["enabled"] is True
+        assert buttons[1]["id"] == "claim"
+        assert buttons[1]["enabled"] is True
+        assert buttons[2]["id"] == "close"
+        assert buttons[2]["enabled"] is True
+        assert buttons[3]["enabled"] is False
+
+    asyncio.run(run())
+
+
+def test_dashboard_button_post_actions():
+    async def run():
+        instance = cog()
+        guild = SimpleNamespace(id=1)
+
+        instance._save_stored_button = AsyncMock(return_value={"id": "test_btn"})
+        instance._delete_stored_button = AsyncMock()
+        instance._reset_stored_buttons = AsyncMock()
+        instance._get_stored_buttons = AsyncMock(return_value={})
+
+        # 1. create_control_button
+        form_create = {
+            "button_id": "test_btn",
+            "button_action": "send_message",
+            "button_label": "Test",
+        }
+        _prof, msgs = await instance._dashboard_handle_action(guild, None, "create_control_button", form_create, "main")
+        instance._save_stored_button.assert_awaited_once()
+        assert msgs[0]["category"] == "success"
+
+        # 2. delete_control_button
+        form_del = {"button_id": "test_btn"}
+        _prof, msgs = await instance._dashboard_handle_action(guild, None, "delete_control_button", form_del, "main")
+        instance._delete_stored_button.assert_awaited_once_with(guild, "test_btn")
+        assert msgs[0]["category"] == "success"
+
+        # 3. reset_control_buttons
+        _prof, msgs = await instance._dashboard_handle_action(guild, None, "reset_control_buttons", {}, "main")
+        instance._reset_stored_buttons.assert_awaited_once_with(guild)
+        assert msgs[0]["category"] == "success"
+
+    asyncio.run(run())
+
+
+def test_dashboard_source_buttons_tab():
+    async def run():
+        instance = cog()
+        guild = SimpleNamespace(id=1, roles=[], categories=[], text_channels=[])
+        instance.config = SimpleNamespace(
+            guild=lambda _: SimpleNamespace(
+                enabled=AsyncMock(return_value=True),
+                next_ticket_id=AsyncMock(return_value=1),
+                tickets=AsyncMock(return_value={}),
+                multi_panels=AsyncMock(return_value={}),
+                aaa3a_panels=AsyncMock(return_value={}),
+            )
+        )
+        instance._get_profiles = AsyncMock(return_value={"main": instance._default_profile()})
+        instance._get_stored_buttons = AsyncMock(return_value=instance._default_stored_buttons())
+        instance._dashboard_workspace_section = AsyncMock(return_value="<div>workspace</div>")
+
+        kwargs = {
+            "form_data": {"action": "save_control_button"},
+            "csrf_token": ("csrf", "token123"),
+        }
+        html = await instance._dashboard_source(guild, "main", kwargs)
+        assert 'data-tab="buttons"' in html
+        assert 'data-tab-panel="buttons"' in html
+        assert "Ticket Control Buttons Library" in html
+        assert "reset_control_buttons" in html
+        assert "create_control_button" in html
+
+    asyncio.run(run())
+
+
+

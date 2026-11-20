@@ -1369,6 +1369,7 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
             tickets={},
             multi_panels={},
             aaa3a_panels={},
+            custom_buttons={},
         )
         self._locks: dict[int, asyncio.Lock] = {}
         self._conversation_tasks: dict[int, asyncio.Task] = {}
@@ -2221,14 +2222,14 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
         return mapping.get(parsed, discord.ButtonStyle.secondary)
 
     @staticmethod
-    def _sanitize_control_buttons(
-        buttons: list[dict[str, Any]] | None,
-        *,
-        control_emojis: dict[str, str] | None = None,
-    ) -> list[dict[str, Any]]:
-        default_defs = TicketHub._default_control_buttons()
-        defaults_by_id = {b["id"]: b for b in default_defs}
-        control_emojis = control_emojis or {}
+    def _default_stored_buttons() -> dict[str, dict[str, Any]]:
+        return {b["id"]: dict(b) for b in TicketHub._default_control_buttons()}
+
+    @staticmethod
+    def _sanitize_single_control_button(
+        raw: dict[str, Any],
+        fallback: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         valid_actions = {
             "claim_toggle",
             "claim",
@@ -2250,6 +2251,89 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
             "toggle_role",
         }
         valid_groups = {"support", "admin", "owner", "claimed_by", "participants", "everyone"}
+        fallback = fallback or {}
+
+        btn_id = str(raw.get("id") or fallback.get("id") or "custom_btn").strip().lower()
+        btn_id = re.sub(r"[^a-z0-9_-]", "_", btn_id)[:32] or "custom_btn"
+
+        action = str(raw.get("action") or fallback.get("action") or "claim_toggle").strip().lower()
+        if action not in valid_actions:
+            action = fallback.get("action", "send_message")
+
+        enabled = bool(raw.get("enabled", fallback.get("enabled", True)))
+        label = str(raw.get("label") if raw.get("label") is not None else fallback.get("label", ""))[:80]
+        emoji = raw.get("emoji") if raw.get("emoji") is not None else fallback.get("emoji")
+        emoji = str(emoji).strip() or None if emoji is not None else None
+        style = TicketHub._parse_button_style(raw.get("style") or fallback.get("style", "secondary"))
+
+        alt_label = raw.get("alt_label") if raw.get("alt_label") is not None else fallback.get("alt_label")
+        alt_label = str(alt_label)[:80] if alt_label is not None else None
+        alt_emoji = raw.get("alt_emoji") if raw.get("alt_emoji") is not None else fallback.get("alt_emoji")
+        alt_emoji = str(alt_emoji).strip() or None if alt_emoji is not None else None
+        alt_style_val = raw.get("alt_style") or fallback.get("alt_style")
+        alt_style = TicketHub._parse_button_style(alt_style_val) if alt_style_val else None
+
+        visibility = str(raw.get("visibility") or fallback.get("visibility", "open")).strip().lower()
+        if visibility not in {"open", "closed", "always"}:
+            visibility = fallback.get("visibility", "open")
+
+        row_val = raw.get("row") if raw.get("row") is not None else fallback.get("row")
+        try:
+            row_val = max(0, min(int(row_val), 4)) if row_val is not None and row_val != "" else None
+        except (ValueError, TypeError):
+            row_val = None
+
+        raw_groups = raw.get("allowed_groups")
+        if raw_groups is None:
+            raw_groups = fallback.get("allowed_groups", [])
+        allowed_groups = [str(g).strip().lower() for g in raw_groups if str(g).strip().lower() in valid_groups]
+
+        def _clean_ids(source):
+            out = []
+            for item in source or []:
+                with contextlib.suppress(ValueError, TypeError):
+                    out.append(int(item))
+            return sorted(set(out))
+
+        raw_roles = raw.get("allowed_role_ids")
+        if raw_roles is None:
+            raw_roles = fallback.get("allowed_role_ids", [])
+        allowed_role_ids = _clean_ids(raw_roles)
+        action_role_ids = _clean_ids(raw.get("action_role_ids"))
+        action_message = str(raw.get("action_message") or "")[:2000]
+        action_embed_title = str(raw.get("action_embed_title"))[:256] if raw.get("action_embed_title") else None
+        ephemeral_response = bool(raw.get("ephemeral_response", False))
+
+        return {
+            "id": btn_id,
+            "action": action,
+            "enabled": enabled,
+            "label": label,
+            "emoji": emoji,
+            "style": style,
+            "alt_label": alt_label,
+            "alt_emoji": alt_emoji,
+            "alt_style": alt_style,
+            "visibility": visibility,
+            "row": row_val,
+            "allowed_groups": allowed_groups,
+            "allowed_role_ids": allowed_role_ids,
+            "action_message": action_message,
+            "action_embed_title": action_embed_title,
+            "action_role_ids": action_role_ids,
+            "ephemeral_response": ephemeral_response,
+        }
+
+
+    @staticmethod
+    def _sanitize_control_buttons(
+        buttons: list[dict[str, Any]] | None,
+        *,
+        control_emojis: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
+        default_defs = TicketHub._default_control_buttons()
+        defaults_by_id = {b["id"]: b for b in default_defs}
+        control_emojis = control_emojis or {}
 
         if not buttons:
             sanitized = []
@@ -2277,75 +2361,9 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
             seen_ids.add(btn_id)
 
             fallback = defaults_by_id.get(btn_id, {})
-            action = str(raw.get("action") or fallback.get("action") or "claim_toggle").strip().lower()
-            if action not in valid_actions:
-                action = fallback.get("action", "send_message")
-
-            enabled = bool(raw.get("enabled", fallback.get("enabled", True)))
-            label = str(raw.get("label") if raw.get("label") is not None else fallback.get("label", ""))[:80]
-            emoji = raw.get("emoji") if raw.get("emoji") is not None else fallback.get("emoji")
-            emoji = str(emoji).strip() or None if emoji is not None else None
-            style = TicketHub._parse_button_style(raw.get("style") or fallback.get("style", "secondary"))
-
-            alt_label = raw.get("alt_label") if raw.get("alt_label") is not None else fallback.get("alt_label")
-            alt_label = str(alt_label)[:80] if alt_label is not None else None
-            alt_emoji = raw.get("alt_emoji") if raw.get("alt_emoji") is not None else fallback.get("alt_emoji")
-            alt_emoji = str(alt_emoji).strip() or None if alt_emoji is not None else None
-            alt_style_val = raw.get("alt_style") or fallback.get("alt_style")
-            alt_style = TicketHub._parse_button_style(alt_style_val) if alt_style_val else None
-
-            visibility = str(raw.get("visibility") or fallback.get("visibility", "open")).strip().lower()
-            if visibility not in {"open", "closed", "always"}:
-                visibility = fallback.get("visibility", "open")
-
-            row_val = raw.get("row") if raw.get("row") is not None else fallback.get("row")
-            try:
-                row_val = max(0, min(int(row_val), 4)) if row_val is not None else None
-            except (ValueError, TypeError):
-                row_val = None
-
-            raw_groups = raw.get("allowed_groups")
-            if raw_groups is None:
-                raw_groups = fallback.get("allowed_groups", [])
-            allowed_groups = [str(g).strip().lower() for g in raw_groups if str(g).strip().lower() in valid_groups]
-
-            def _clean_ids(source):
-                out = []
-                for item in source or []:
-                    with contextlib.suppress(ValueError, TypeError):
-                        out.append(int(item))
-                return sorted(set(out))
-
-            raw_roles = raw.get("allowed_role_ids")
-            if raw_roles is None:
-                raw_roles = fallback.get("allowed_role_ids", [])
-            allowed_role_ids = _clean_ids(raw_roles)
-            action_role_ids = _clean_ids(raw.get("action_role_ids"))
-            action_message = str(raw.get("action_message") or "")[:2000]
-            action_embed_title = str(raw.get("action_embed_title"))[:256] if raw.get("action_embed_title") else None
-            ephemeral_response = bool(raw.get("ephemeral_response", False))
-
-            sanitized.append(
-                {
-                    "id": btn_id,
-                    "action": action,
-                    "enabled": enabled,
-                    "label": label,
-                    "emoji": emoji,
-                    "style": style,
-                    "alt_label": alt_label,
-                    "alt_emoji": alt_emoji,
-                    "alt_style": alt_style,
-                    "visibility": visibility,
-                    "row": row_val,
-                    "allowed_groups": allowed_groups,
-                    "allowed_role_ids": allowed_role_ids,
-                    "action_message": action_message,
-                    "action_embed_title": action_embed_title,
-                    "action_role_ids": action_role_ids,
-                    "ephemeral_response": ephemeral_response,
-                }
-            )
+            cleaned = TicketHub._sanitize_single_control_button(raw, fallback=fallback)
+            cleaned["id"] = btn_id
+            sanitized.append(cleaned)
 
         current_ids = {b["id"] for b in sanitized}
         for def_btn in default_defs:
@@ -3020,6 +3038,110 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
             profile = self._merge_profile(profiles.get(key))
             profiles[key] = profile
             return profile
+    async def _get_stored_buttons(self, guild: discord.Guild) -> dict[str, dict[str, Any]]:
+        stored = await self.config.guild(guild).custom_buttons()
+        defaults = self._default_stored_buttons()
+        if not stored:
+            seeded = dict(defaults)
+            profiles = await self._get_profiles(guild)
+            for prof in profiles.values():
+                for btn in prof.get("control_buttons") or []:
+                    b_id = btn.get("id")
+                    if b_id and (b_id not in seeded or btn != defaults.get(b_id)):
+                        seeded[b_id] = self._sanitize_single_control_button(btn)
+            await self.config.guild(guild).custom_buttons.set(seeded)
+            return seeded
+        result = dict(defaults)
+        for k, v in stored.items():
+            if isinstance(v, dict):
+                result[k] = self._sanitize_single_control_button(v, fallback=defaults.get(k))
+        return result
+
+    async def _save_stored_button(self, guild: discord.Guild, button_def: dict[str, Any]) -> dict[str, Any]:
+        defaults = self._default_stored_buttons()
+        b_id = str(button_def.get("id") or "").strip().lower()
+        b_id = re.sub(r"[^a-z0-9_-]", "_", b_id)[:32]
+        if not b_id:
+            raise commands.BadArgument("Button ID is required.")
+        fallback = defaults.get(b_id, {})
+        sanitized = self._sanitize_single_control_button(button_def, fallback=fallback)
+        sanitized["id"] = b_id
+
+        stored = await self._get_stored_buttons(guild)
+        stored[b_id] = sanitized
+        await self.config.guild(guild).custom_buttons.set(stored)
+
+        profiles = await self._get_profiles(guild)
+        changed_profiles = []
+        for p_name, prof in profiles.items():
+            buttons = prof.get("control_buttons") or []
+            updated = False
+            for idx, b in enumerate(buttons):
+                if b.get("id") == b_id:
+                    was_enabled = b.get("enabled", True)
+                    buttons[idx] = dict(sanitized)
+                    buttons[idx]["enabled"] = was_enabled
+                    updated = True
+            if updated:
+                prof["control_buttons"] = buttons
+                await self._set_profile(guild, p_name, prof)
+                changed_profiles.append((p_name, prof))
+
+        if changed_profiles:
+            tickets = await self.config.guild(guild).tickets()
+            for p_name, prof in changed_profiles:
+                for record in tickets.values():
+                    if str(record.get("profile") or "main") == p_name:
+                        await self._update_ticket_message(guild, record, prof)
+
+        return sanitized
+
+    async def _delete_stored_button(self, guild: discord.Guild, button_id: str) -> None:
+        button_id = str(button_id).strip().lower()
+        stored = await self._get_stored_buttons(guild)
+        defaults = self._default_stored_buttons()
+        is_default = button_id in defaults
+
+        if is_default:
+            stored[button_id] = dict(defaults[button_id])
+        else:
+            stored.pop(button_id, None)
+        await self.config.guild(guild).custom_buttons.set(stored)
+
+        profiles = await self._get_profiles(guild)
+        changed_profiles = []
+        for p_name, prof in profiles.items():
+            buttons = prof.get("control_buttons") or []
+            updated = False
+            if is_default:
+                for idx, b in enumerate(buttons):
+                    if b.get("id") == button_id:
+                        was_enabled = b.get("enabled", True)
+                        buttons[idx] = dict(defaults[button_id])
+                        buttons[idx]["enabled"] = was_enabled
+                        updated = True
+            else:
+                new_buttons = [b for b in buttons if b.get("id") != button_id]
+                if len(new_buttons) != len(buttons):
+                    buttons = new_buttons
+                    updated = True
+            if updated:
+                prof["control_buttons"] = buttons
+                await self._set_profile(guild, p_name, prof)
+                changed_profiles.append((p_name, prof))
+
+        if changed_profiles:
+            tickets = await self.config.guild(guild).tickets()
+            for p_name, prof in changed_profiles:
+                for record in tickets.values():
+                    if str(record.get("profile") or "main") == p_name:
+                        await self._update_ticket_message(guild, record, prof)
+
+    async def _reset_stored_buttons(self, guild: discord.Guild) -> None:
+        defaults = self._default_stored_buttons()
+        await self.config.guild(guild).custom_buttons.set(dict(defaults))
+
+
 
     @staticmethod
     def _profile_channel(
@@ -6687,7 +6809,7 @@ search.addEventListener('input', () => {{
             raise commands.BadArgument("Enable the bot's reactions intent before selecting reaction mode.")
         await self._set_profile(ctx.guild, profile_name, profile)
         if surface == "panel":
-            await self._dashboard_refresh_profile_panel(ctx.guild, profile_name, profile)
+            await self._dashboard_refresh_profile_panel(ctx.guild, profile_name, profile, update_view=True)
         elif surface == "controls":
             for record in (await self.config.guild(ctx.guild).tickets()).values():
                 if record.get("profile") == profile_name:

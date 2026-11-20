@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import html
 import logging
+import re
 import typing
 
 import discord
@@ -600,6 +601,41 @@ class DashboardIntegration:
                     "category": "success",
                 },
             )
+        elif action in {"save_control_button", "create_control_button"}:
+            btn_def = self._dashboard_parse_control_button_form(form_data)
+            if action == "create_control_button":
+                stored = await self._get_stored_buttons(guild)
+                if btn_def["id"] in stored and btn_def["id"] not in self._default_stored_buttons():
+                    raise commands.BadArgument(
+                        f"A button with ID `{btn_def['id']}` already exists. Use the edit form below to modify it."
+                    )
+            saved = await self._save_stored_button(guild, btn_def)
+            messages.append(
+                {
+                    "message": f"Control button `{saved['id']}` saved.",
+                    "category": "success",
+                },
+            )
+
+        elif action == "delete_control_button":
+            target_id = self._dash_value(form_data, "button_id").strip().lower()
+            await self._delete_stored_button(guild, target_id)
+            messages.append(
+                {
+                    "message": f"Control button `{target_id}` deleted / reset.",
+                    "category": "success",
+                },
+            )
+
+        elif action == "reset_control_buttons":
+            await self._reset_stored_buttons(guild)
+            messages.append(
+                {
+                    "message": "All control buttons reset to defaults.",
+                    "category": "success",
+                },
+            )
+
 
         elif action == "save_modal":
             selected_profile = await self._dashboard_save_modal(guild, form_data)
@@ -1026,11 +1062,31 @@ class DashboardIntegration:
             configured[action] = value
         profile["control_emojis"] = configured
 
+        has_slot_assignment = any(f"slot_{i}_button" in form_data for i in range(10))
         submitted_buttons = []
-        for i in range(10):
-            id_key = f"btn_{i}_id"
-            if id_key not in form_data:
-                continue
+        if has_slot_assignment:
+            stored_buttons = await self._get_stored_buttons(guild)
+            for i in range(10):
+                slot_btn_id = self._dash_value(form_data, f"slot_{i}_button").strip().lower()
+                if slot_btn_id and slot_btn_id in stored_buttons:
+                    btn = dict(stored_buttons[slot_btn_id])
+                    btn["enabled"] = True
+                    submitted_buttons.append(btn)
+                else:
+                    fallback_def = self._default_stored_buttons().get(f"custom_{i + 1}") or {
+                        "id": f"slot_{i + 1}",
+                        "action": "send_message",
+                        "label": "",
+                    }
+                    btn = dict(fallback_def)
+                    btn["id"] = f"slot_{i + 1}" if not btn.get("id") else btn["id"]
+                    btn["enabled"] = False
+                    submitted_buttons.append(btn)
+        else:
+            for i in range(10):
+                id_key = f"btn_{i}_id"
+                if id_key not in form_data:
+                    continue
             btn_id = self._dash_value(form_data, id_key).strip().lower() or f"btn_{i + 1}"
             enabled = self._dash_bool(form_data, f"btn_{i}_enabled")
             action = self._dash_value(form_data, f"btn_{i}_action", "claim_toggle")
@@ -1109,7 +1165,34 @@ class DashboardIntegration:
             profile["control_emojis"] = emojis
 
         await self._set_profile(guild, profile_name, profile)
-        await self._dashboard_refresh_profile_panel(guild, profile_name, profile)
+
+        panel_view_fields = {
+            "panel_style",
+            "panel_button_label",
+            "panel_button_emoji",
+            "panel_button_style",
+            "panel_dropdown_placeholder",
+            "panel_dropdown_label",
+            "panel_dropdown_emoji",
+            "panel_dropdown_description",
+        }
+        panel_embed_fields = {
+            "panel_title",
+            "panel_message",
+            "panel_color",
+            "panel_footer",
+            "panel_image_url",
+            "panel_thumbnail_url",
+            "panel_show_details",
+            "panel_channel_id",
+            "panel_message_id",
+        }
+        has_view_changes = any(field in form_data for field in panel_view_fields)
+        has_embed_changes = any(field in form_data for field in panel_embed_fields)
+        if has_view_changes:
+            await self._dashboard_refresh_profile_panel(guild, profile_name, profile, update_view=True)
+        elif has_embed_changes:
+            await self._dashboard_refresh_profile_panel(guild, profile_name, profile, update_view=False)
 
         tickets = await self.config.guild(guild).tickets()
         if configured != old_emojis or profile["control_mode"] != old_control_mode or submitted_buttons:
@@ -1785,6 +1868,7 @@ class DashboardIntegration:
         guild: discord.Guild,
         profile_name: str,
         profile: dict[str, typing.Any],
+        update_view: bool = False,
     ) -> None:
         if not profile.get("panel_channel_id") or not profile.get("panel_message_id"):
             return
@@ -1794,11 +1878,16 @@ class DashboardIntegration:
                 profile.get("panel_channel_id"),
                 profile.get("panel_message_id"),
             )
-            message = await message.edit(
-                embed=self._panel_embed(guild, profile_name, profile),
-                view=self._panel_view_for_style(profile.get("panel_style")),
-            )
-            await self._alternative_panel(message, profile.get("panel_style"), [{"profile": profile_name, "label": profile_name}])
+            embed = self._panel_embed(guild, profile_name, profile)
+            if update_view:
+                view = self._panel_view_for_style(profile.get("panel_style"), profile=profile)
+                message = await message.edit(
+                    embed=embed,
+                    view=view,
+                )
+                await self._alternative_panel(message, profile.get("panel_style"), [{"profile": profile_name, "label": profile_name}])
+            else:
+                await message.edit(embed=embed)
         except (commands.CommandError, discord.HTTPException):
             log.debug(
                 "Could not refresh TicketHub panel for %s in %s.",
@@ -1819,6 +1908,7 @@ class DashboardIntegration:
         tickets = await self.config.guild(guild).tickets()
         multi_panels = await self.config.guild(guild).multi_panels()
         aaa3a_panels = await self.config.guild(guild).aaa3a_panels()
+        stored_buttons = await self._get_stored_buttons(guild)
         if selected_profile not in profiles:
             selected_profile = "main" if "main" in profiles else next(iter(profiles), "main")
         profile = profiles[selected_profile]
@@ -1863,6 +1953,10 @@ class DashboardIntegration:
                 "create_profile": "setup",
                 "delete_profile": "setup",
                 "save_profile": "setup",
+                "save_control_button": "buttons",
+                "create_control_button": "buttons",
+                "delete_control_button": "buttons",
+                "reset_control_buttons": "buttons",
                 "save_modal": "modal",
                 "add_modal_question": "modal",
                 "remove_modal_question": "modal",
@@ -1980,6 +2074,7 @@ class DashboardIntegration:
                 {self._dashboard_tab_button("tickets", "Tickets", active_tab)}
                 {self._dashboard_tab_button("desk", "Ticket Desk", active_tab)}
                 {self._dashboard_tab_button("setup", "Profile Setup", active_tab)}
+                {self._dashboard_tab_button("buttons", "Control Buttons", active_tab)}
                 {self._dashboard_tab_button("modal", "Modal", active_tab)}
                 {self._dashboard_tab_button("panels", "Panels", active_tab)}
                 {self._dashboard_tab_button("imports", "AAA3A Imports", active_tab)}
@@ -1991,7 +2086,9 @@ class DashboardIntegration:
             <section class="dash-panel{" active" if active_tab == "setup" else ""}"
             data-tab-panel="setup">{self._dashboard_global_section(enabled, next_ticket_id, csrf)}{
             self._dashboard_profile_selector(profiles, selected_profile, csrf)
-        }{self._dashboard_profile_section(guild, selected_profile, profile, csrf)}</section>
+        }{self._dashboard_profile_section(guild, selected_profile, profile, csrf, stored_buttons=stored_buttons)}</section>
+            <section class="dash-panel{" active" if active_tab == "buttons" else ""}"
+            data-tab-panel="buttons">{self._dashboard_buttons_tab(guild, stored_buttons, csrf)}</section>
             <section class="dash-panel{" active" if active_tab == "modal" else ""}"
             data-tab-panel="modal">{self._dashboard_modal_section(selected_profile, profile, csrf)}</section>
             <section class="dash-panel{" active" if active_tab == "panels" else ""}"
@@ -2074,6 +2171,7 @@ class DashboardIntegration:
         profile_name: str,
         profile: dict[str, typing.Any],
         csrf: str,
+        stored_buttons: dict[str, dict[str, typing.Any]] | None = None,
     ) -> str:
         role_fields = "".join(
             self._multi_role_select(
@@ -2194,9 +2292,9 @@ class DashboardIntegration:
                 </div>
                 <h3>Roles</h3>
                 <div class="th-row">{role_fields}</div>
-                <h3>Ticket Control Buttons</h3>
-                <p class="th-muted">Configure appearance, actions, visibility, and permissions for ticket buttons.</p>
-                {self._dashboard_control_buttons_section(guild, profile)}
+                <h3>Ticket Control Buttons Assignment</h3>
+                <p class="th-muted">Assign up to 10 control buttons for tickets created with this profile. You can customize actions, labels, emojis, and permissions in the <a href="#buttons" onclick="const b = document.querySelector('[data-tab=buttons]'); if (b) b.click();">Control Buttons</a> tab.</p>
+                {self._dashboard_profile_buttons_assignment(guild, profile, stored_buttons)}
                 <button class="th-btn" type="submit">Save Profile</button>
             </form>
         </div>
@@ -2236,12 +2334,13 @@ class DashboardIntegration:
     def _dashboard_button_permission_fields(
         self,
         guild: discord.Guild,
-        index: int,
+        index: typing.Any,
         allowed_groups: set[str],
         allowed_roles: list[int],
     ) -> str:
+        prefix = f"btn_{index}_" if isinstance(index, int) else (f"{index}_" if not str(index).endswith("_") else str(index))
         group_checks = "".join(
-            f'<label class="th-check"><input type="checkbox" name="btn_{index}_group_{grp}" value="1" '
+            f'<label class="th-check"><input type="checkbox" name="{prefix}group_{grp}" value="1" '
             f"{self._checked(grp in allowed_groups)}> {glbl}</label>"
             for grp, glbl in [
                 ("support", "Support Roles"),
@@ -2259,7 +2358,7 @@ class DashboardIntegration:
                 <label class="th-muted">Allowed Permission Groups (if none selected, action defaults apply):</label>
                 <div class="th-grid" style="margin-top: 6px;">{group_checks}</div>
             </div>
-            {self._multi_role_select(guild, f"btn_{index}_allowed_roles", "Additional Allowed Roles", allowed_roles)}
+            {self._multi_role_select(guild, f"{prefix}allowed_roles", "Additional Allowed Roles", allowed_roles)}
         </div>
         """
 
@@ -2369,6 +2468,338 @@ class DashboardIntegration:
             btn = buttons[index] if index < len(buttons) else {}
             cards.append(self._dashboard_control_button_card(guild, index, btn))
         return "".join(cards)
+    def _dashboard_profile_buttons_assignment(
+        self,
+        guild: discord.Guild,
+        profile: dict[str, typing.Any],
+        stored_buttons: dict[str, dict[str, typing.Any]] | None = None,
+    ) -> str:
+        if stored_buttons is None:
+            stored_buttons = self._default_stored_buttons()
+
+        profile_buttons = profile.get("control_buttons") or []
+        rows = []
+        for slot_idx in range(10):
+            assigned_id = ""
+            if slot_idx < len(profile_buttons):
+                btn_record = profile_buttons[slot_idx]
+                if btn_record.get("enabled", True):
+                    assigned_id = str(btn_record.get("id") or "").strip().lower()
+
+            options = ['<option value="">-- None / Disabled --</option>']
+            for b_id, b_data in stored_buttons.items():
+                lbl = b_data.get("label") or b_id
+                action = b_data.get("action", "")
+                emoji = b_data.get("emoji") or ""
+                emoji_disp = f"{emoji} " if emoji else ""
+                opt_text = self._h(f"{emoji_disp}{lbl} ({b_id}) [{action}]")
+                selected_attr = " selected" if assigned_id == b_id else ""
+                options.append(f'<option value="{self._h(b_id)}"{selected_attr}>{opt_text}</option>')
+
+            options_html = "".join(options)
+            rows.append(
+                f"""
+                <div class="th-field" style="margin-bottom: 8px;">
+                    <label><strong>Slot {slot_idx + 1}</strong></label>
+                    <select name="slot_{slot_idx}_button">{options_html}</select>
+                </div>
+                """
+            )
+
+        slots_grid = "".join(rows)
+        return f"""
+        <div class="th-card" style="margin-bottom: 16px;">
+            <div class="th-grid" style="grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px;">
+                {slots_grid}
+            </div>
+            <div style="margin-top: 12px;">
+                <a href="#buttons" class="th-btn" style="text-decoration: none; display: inline-block;"
+                   onclick="const btn = document.querySelector('[data-tab=buttons]'); if (btn) btn.click();">
+                    Manage Button Definitions in Control Buttons Tab &rarr;
+                </a>
+            </div>
+        </div>
+        """
+
+    def _dashboard_parse_control_button_form(
+        self,
+        form_data: typing.Any,
+        prefix: str = "button_",
+    ) -> dict[str, typing.Any]:
+        raw_id = self._dash_value(form_data, f"{prefix}id").strip().lower()
+        clean_id = re.sub(r"[^a-z0-9_-]", "_", raw_id)[:32]
+        if not clean_id:
+            raise commands.BadArgument("Button ID is required and must contain alphanumeric characters.")
+
+        action = self._dash_value(form_data, f"{prefix}action", "claim_toggle").strip().lower()
+        label = self._clean_modal_text(self._dash_value(form_data, f"{prefix}label"), 80) or ""
+        emoji_raw = self._dash_value(form_data, f"{prefix}emoji").strip()
+        emoji = emoji_raw or None
+        style = self._parse_button_style(self._dash_value(form_data, f"{prefix}style", "secondary"))
+        alt_label = self._clean_modal_text(self._dash_value(form_data, f"{prefix}alt_label"), 80) or None
+        alt_emoji_raw = self._dash_value(form_data, f"{prefix}alt_emoji").strip()
+        alt_emoji = alt_emoji_raw or None
+        alt_style_raw = self._dash_value(form_data, f"{prefix}alt_style")
+        alt_style = self._parse_button_style(alt_style_raw) if alt_style_raw else None
+        visibility = self._dash_value(form_data, f"{prefix}visibility", "open").strip().lower()
+        if visibility not in {"open", "closed", "always"}:
+            visibility = "open"
+        row_raw = self._dash_value(form_data, f"{prefix}row")
+        try:
+            row_val = max(0, min(int(row_raw), 4)) if row_raw != "" and row_raw is not None else None
+        except (ValueError, TypeError):
+            row_val = None
+
+        allowed_groups = []
+        for grp in ("support", "admin", "owner", "claimed_by", "participants", "everyone"):
+            if self._dash_bool(form_data, f"{prefix}group_{grp}"):
+                allowed_groups.append(grp)
+
+        def _clean_ids_from_form(key):
+            res = []
+            for val in self._dash_values(form_data, key):
+                with contextlib.suppress(ValueError, TypeError):
+                    res.append(int(val))
+            return sorted(set(res))
+
+        allowed_roles = _clean_ids_from_form(f"{prefix}allowed_roles")
+        action_roles = _clean_ids_from_form(f"{prefix}action_roles")
+        action_message = self._dash_value(form_data, f"{prefix}action_message").strip()[:2000]
+        action_embed_title = self._clean_modal_text(self._dash_value(form_data, f"{prefix}action_embed_title"), 256) or None
+        ephemeral = self._dash_bool(form_data, f"{prefix}ephemeral")
+
+        return {
+            "id": clean_id,
+            "action": action,
+            "enabled": True,
+            "label": label,
+            "emoji": emoji,
+            "style": style,
+            "alt_label": alt_label,
+            "alt_emoji": alt_emoji,
+            "alt_style": alt_style,
+            "visibility": visibility,
+            "row": row_val,
+            "allowed_groups": allowed_groups,
+            "allowed_role_ids": allowed_roles,
+            "action_message": action_message,
+            "action_embed_title": action_embed_title,
+            "action_role_ids": action_roles,
+            "ephemeral_response": ephemeral,
+        }
+
+    def _dashboard_buttons_tab(
+        self,
+        guild: discord.Guild,
+        stored_buttons: dict[str, dict[str, typing.Any]],
+        csrf: str,
+    ) -> str:
+        cards = [
+            f"""
+            <div class="th-card">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+                    <div>
+                        <h3>Ticket Control Buttons Library</h3>
+                        <p class="th-muted" style="margin: 0;">Configure reusable control buttons for tickets in this server. Create custom buttons or modify defaults, then assign them to specific profiles in <strong>Profile Setup</strong>.</p>
+                    </div>
+                    <form method="POST">
+                        {csrf}
+                        <input type="hidden" name="action" value="reset_control_buttons">
+                        <button class="th-btn th-btn-danger" type="submit" onclick="return confirm('Reset all stored control buttons to default definitions?')">Reset All to Defaults</button>
+                    </form>
+                </div>
+            </div>
+            """,
+            self._dashboard_create_button_card(guild, csrf),
+        ]
+        for btn_id, btn in stored_buttons.items():
+            cards.append(self._dashboard_stored_button_card(guild, btn_id, btn, csrf))
+        return "".join(cards)
+
+    def _dashboard_create_button_card(self, guild: discord.Guild, csrf: str) -> str:
+        action_opts = self._dashboard_button_action_options("send_message")
+        create_perm_html = self._dashboard_button_permission_fields(guild, "button", set(), [])
+        return f"""
+        <div class="th-card th-btn-card" data-btn-card="1">
+            <div class="th-btn-header">
+                <strong>+ Create New Control Button</strong>
+                <span class="th-btn-badge" data-btn-summary="1">New Button</span>
+            </div>
+            <form method="POST">
+                {csrf}
+                <input type="hidden" name="action" value="create_control_button">
+                <div class="th-row">
+                    <div class="th-field">
+                        <label>Button ID (slug, letters/numbers/underscores)</label>
+                        <input type="text" name="button_id" placeholder="e.g. escalate, call_lead" required pattern="[a-zA-Z0-9_-]{{1,32}}">
+                    </div>
+                    <div class="th-field">
+                        <label>Action</label>
+                        <select name="button_action" data-btn-action-select="1">{action_opts}</select>
+                    </div>
+                    <div class="th-field">
+                        <label>Button Label</label>
+                        <input type="text" name="button_label" placeholder="e.g. Escalate Ticket">
+                    </div>
+                    <div class="th-field">
+                        <label>Button Emoji</label>
+                        <input type="text" name="button_emoji" placeholder="e.g. ⚠️">
+                    </div>
+                    <div class="th-field">
+                        <label>Style</label>
+                        <select name="button_style">
+                            {self._option("secondary", "Secondary (Grey)", "secondary")}
+                            {self._option("primary", "Primary (Blurple)", "secondary")}
+                            {self._option("success", "Success (Green)", "secondary")}
+                            {self._option("danger", "Danger (Red)", "secondary")}
+                        </select>
+                    </div>
+                    <div class="th-field">
+                        <label>Visibility</label>
+                        <select name="button_visibility">
+                            {self._option("open", "Open Tickets Only", "open")}
+                            {self._option("closed", "Closed Tickets Only", "open")}
+                            {self._option("always", "Always Visible", "open")}
+                        </select>
+                    </div>
+                    <div class="th-field">
+                        <label>Row Position</label>
+                        <select name="button_row">
+                            {self._option("", "Auto (Next available)", "")}
+                            {self._option("0", "Row 1", "")}{self._option("1", "Row 2", "")}
+                            {self._option("2", "Row 3", "")}{self._option("3", "Row 4", "")}
+                            {self._option("4", "Row 5", "")}
+                        </select>
+                    </div>
+                </div>
+                <div class="th-row" data-btn-field="toggle_alt">
+                    {self._input("button_alt_label", "Toggled / Active Label", "")}
+                    {self._input("button_alt_emoji", "Toggled Emoji", "")}
+                    <div class="th-field"><label>Toggled Style</label><select name="button_alt_style">
+                        {self._option("secondary", "Secondary (Grey)", "secondary")}
+                        {self._option("primary", "Primary (Blurple)", "secondary")}
+                        {self._option("success", "Success (Green)", "secondary")}
+                        {self._option("danger", "Danger (Red)", "secondary")}
+                    </select></div>
+                </div>
+                <div data-btn-field="custom_action">
+                    <div class="th-row">
+                        <div data-btn-field="custom_message">
+                            {self._textarea("button_action_message", "Message / Content", "", rows=2)}
+                        </div>
+                        <div data-btn-field="custom_embed">
+                            {self._input("button_action_embed_title", "Embed Title (optional)", "")}
+                        </div>
+                    </div>
+                    <div class="th-row">
+                        <div data-btn-field="custom_roles">
+                            {self._multi_role_select(guild, "button_action_roles", "Target Roles (for Ping / Toggle)", [])}
+                        </div>
+                        <div data-btn-field="custom_ephemeral">
+                            <label class="th-check"><input type="checkbox" name="button_ephemeral" value="1"> Ephemeral response (only visible to clicking user)</label>
+                        </div>
+                    </div>
+                </div>
+                {create_perm_html}
+                <button class="th-btn" type="submit">Create Button</button>
+            </form>
+        </div>
+        """
+
+    def _dashboard_stored_button_card(
+        self,
+        guild: discord.Guild,
+        btn_id: str,
+        btn: dict[str, typing.Any],
+        csrf: str,
+    ) -> str:
+        action = btn.get("action", "claim_toggle")
+        label = btn.get("label", "")
+        emoji = btn.get("emoji", "")
+        style = btn.get("style", "secondary")
+        alt_label = btn.get("alt_label", "")
+        alt_emoji = btn.get("alt_emoji", "")
+        alt_style = btn.get("alt_style", "secondary")
+        visibility = btn.get("visibility", "open")
+        row = "" if btn.get("row") is None else str(btn.get("row"))
+        allowed_groups = set(btn.get("allowed_groups") or [])
+        allowed_roles = btn.get("allowed_role_ids") or []
+        action_roles = btn.get("action_role_ids") or []
+        action_msg = btn.get("action_message", "")
+        action_embed_title = btn.get("action_embed_title", "")
+        ephemeral = btn.get("ephemeral_response", False)
+
+        summary_text = f"{self._h(label or btn_id)} • {self._h(action)}"
+        action_opts = self._dashboard_button_action_options(action)
+        perm_html = self._dashboard_button_permission_fields(guild, "button", allowed_groups, allowed_roles)
+        defaults = self._default_stored_buttons()
+        is_default = btn_id in defaults
+        del_label = "Reset to Default" if is_default else "Delete Button"
+
+        return f"""
+        <div class="th-card th-btn-card" data-btn-card="1">
+            <div class="th-btn-header">
+                <strong>Button: {self._h(btn_id)} ({self._h(label or btn_id)})</strong>
+                <span class="th-btn-badge" data-btn-summary="1">{summary_text}</span>
+            </div>
+            <form method="POST">
+                {csrf}
+                <input type="hidden" name="action" value="save_control_button">
+                <input type="hidden" name="button_id" value="{self._h(btn_id)}">
+                <div class="th-row">
+                    <div class="th-field"><label>Action</label><select name="button_action" data-btn-action-select="1">{action_opts}</select></div>
+                    <div class="th-field"><label>Button Label</label><input type="text" name="button_label" value="{self._h(label)}"></div>
+                    <div class="th-field"><label>Button Emoji</label><input type="text" name="button_emoji" value="{self._h(emoji or '')}"></div>
+                    <div class="th-field"><label>Style</label><select name="button_style">
+                        {self._option("secondary", "Secondary (Grey)", style)}{self._option("primary", "Primary (Blurple)", style)}
+                        {self._option("success", "Success (Green)", style)}{self._option("danger", "Danger (Red)", style)}
+                    </select></div>
+                    <div class="th-field"><label>Visibility</label><select name="button_visibility">
+                        {self._option("open", "Open Tickets Only", visibility)}{self._option("closed", "Closed Tickets Only", visibility)}
+                        {self._option("always", "Always Visible", visibility)}
+                    </select></div>
+                    <div class="th-field"><label>Row Position</label><select name="button_row">
+                        {self._option("", "Auto", row)}{self._option("0", "Row 1", row)}{self._option("1", "Row 2", row)}
+                        {self._option("2", "Row 3", row)}{self._option("3", "Row 4", row)}{self._option("4", "Row 5", row)}
+                    </select></div>
+                </div>
+                <div class="th-row" data-btn-field="toggle_alt">
+                    {self._input("button_alt_label", "Toggled / Active Label", alt_label or "")}
+                    {self._input("button_alt_emoji", "Toggled Emoji", alt_emoji or "")}
+                    <div class="th-field"><label>Toggled Style</label><select name="button_alt_style">
+                        {self._option("secondary", "Secondary (Grey)", alt_style)}{self._option("primary", "Primary (Blurple)", alt_style)}
+                        {self._option("success", "Success (Green)", alt_style)}{self._option("danger", "Danger (Red)", alt_style)}
+                    </select></div>
+                </div>
+                <div data-btn-field="custom_action">
+                    <div class="th-row">
+                        <div data-btn-field="custom_message">{self._textarea("button_action_message", "Message / Content", action_msg, rows=2)}</div>
+                        <div data-btn-field="custom_embed">{self._input("button_action_embed_title", "Embed Title (optional)", action_embed_title or "")}</div>
+                    </div>
+                    <div class="th-row">
+                        <div data-btn-field="custom_roles">{self._multi_role_select(guild, "button_action_roles", "Target Roles (for Ping / Toggle)", action_roles)}</div>
+                        <div data-btn-field="custom_ephemeral">
+                            <label class="th-check"><input type="checkbox" name="button_ephemeral" value="1" {self._checked(ephemeral)}> Ephemeral response</label>
+                        </div>
+                    </div>
+                </div>
+                {perm_html}
+                <div style="display: flex; gap: 8px; margin-top: 10px;">
+                    <button class="th-btn" type="submit">Save Changes</button>
+                </div>
+            </form>
+            <form method="POST" style="margin-top: 8px;">
+                {csrf}
+                <input type="hidden" name="action" value="delete_control_button">
+                <input type="hidden" name="button_id" value="{self._h(btn_id)}">
+                <button class="th-btn th-btn-danger" type="submit" onclick="return confirm('Are you sure you want to delete / reset this button?')">{del_label}</button>
+            </form>
+        </div>
+        """
+
+
+
+
 
     def _modal_type_options(self, selected: str) -> str:
         types = [
