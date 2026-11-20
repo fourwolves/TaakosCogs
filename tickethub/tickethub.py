@@ -53,9 +53,22 @@ MODAL_SELECTS_SUPPORTED = hasattr(discord.ui, "Label")
 class TicketPanelView(discord.ui.View):
     """Persistent view for ticket panel messages."""
 
-    def __init__(self, cog: TicketHub) -> None:
+    def __init__(
+        self,
+        cog: TicketHub,
+        *,
+        label: str = "Open Ticket",
+        emoji: str | None = "\N{ENVELOPE WITH DOWNWARDS ARROW ABOVE}",
+        style: discord.ButtonStyle = discord.ButtonStyle.primary,
+    ) -> None:
         super().__init__(timeout=None)
         self.cog = cog
+        for item in self.children:
+            if getattr(item, "custom_id", None) == "taakoscogs:tickethub:open" and isinstance(item, discord.ui.Button):
+                item.label = label[:80] if label else "Open Ticket"
+                item.emoji = emoji or None
+                item.style = style
+                break
 
     @discord.ui.button(
         label="Open Ticket",
@@ -74,9 +87,29 @@ class TicketPanelView(discord.ui.View):
 class TicketPanelSelectView(discord.ui.View):
     """Persistent dropdown view for ticket panel messages."""
 
-    def __init__(self, cog: TicketHub) -> None:
+    def __init__(
+        self,
+        cog: TicketHub,
+        *,
+        placeholder: str = "Open a ticket...",
+        label: str = "Open Ticket",
+        emoji: str | None = "\N{ENVELOPE WITH DOWNWARDS ARROW ABOVE}",
+        description: str | None = None,
+    ) -> None:
         super().__init__(timeout=None)
         self.cog = cog
+        for item in self.children:
+            if getattr(item, "custom_id", None) == "taakoscogs:tickethub:open-select" and isinstance(item, discord.ui.Select):
+                item.placeholder = (placeholder or "Open a ticket...")[:100]
+                item.options = [
+                    discord.SelectOption(
+                        label=(label or "Open Ticket")[:100],
+                        value="open",
+                        emoji=emoji or None,
+                        description=(description or None)[:100] if description else None,
+                    ),
+                ]
+                break
 
     @discord.ui.select(
         placeholder="Open a ticket...",
@@ -1553,6 +1586,18 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
             "next_profile_ticket_id": None,
             "panel_title": "Need Help?",
             "panel_message": "Open a ticket and staff will help you as soon as possible.",
+            "panel_color": None,
+            "panel_footer": "TicketHub",
+            "panel_image_url": None,
+            "panel_thumbnail_url": None,
+            "panel_show_details": True,
+            "panel_button_label": "Open Ticket",
+            "panel_button_emoji": "\N{ENVELOPE WITH DOWNWARDS ARROW ABOVE}",
+            "panel_button_style": "primary",
+            "panel_dropdown_placeholder": "Open a ticket...",
+            "panel_dropdown_label": "Open Ticket",
+            "panel_dropdown_emoji": "\N{ENVELOPE WITH DOWNWARDS ARROW ABOVE}",
+            "panel_dropdown_description": None,
             "welcome_message": ("Welcome {owner_mention}. A staff member will be with you shortly."),
             "custom_message": "Please describe what you need help with.",
             "creating_modal": None,
@@ -1939,6 +1984,39 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
             )
         return fields or None
 
+    @classmethod
+    def _sanitize_panel_color(cls, value: Any) -> int | None:
+        if value is None or value == "":
+            return None
+        if isinstance(value, int):
+            return max(0, min(value, 0xFFFFFF))
+        if isinstance(value, str):
+            clean = value.strip().lstrip("#")
+            if not clean:
+                return None
+            try:
+                return int(clean, 16)
+            except ValueError:
+                return None
+        return None
+
+    @classmethod
+    def _parse_button_style(cls, value: Any) -> str:
+        clean = str(value or "primary").strip().lower()
+        aliases = {
+            "primary": "primary",
+            "blurple": "primary",
+            "blue": "primary",
+            "secondary": "secondary",
+            "grey": "secondary",
+            "gray": "secondary",
+            "success": "success",
+            "green": "success",
+            "danger": "danger",
+            "red": "danger",
+        }
+        return aliases.get(clean, "primary")
+
     @staticmethod
     def _merge_profile(value: dict[str, Any] | None) -> ProfileRecord:
         profile = TicketHub._default_profile()
@@ -1958,6 +2036,28 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
                 profile.get("creating_modal"),
             )
             profile["panel_style"] = TicketHub._panel_style(profile.get("panel_style"))
+            profile["panel_color"] = TicketHub._sanitize_panel_color(profile.get("panel_color"))
+            profile["panel_footer"] = str(profile.get("panel_footer") or "TicketHub")[:2048]
+            profile["panel_image_url"] = str(profile.get("panel_image_url") or "").strip() or None
+            profile["panel_thumbnail_url"] = str(profile.get("panel_thumbnail_url") or "").strip() or None
+            profile["panel_show_details"] = bool(profile.get("panel_show_details", True))
+            profile["panel_button_label"] = str(profile.get("panel_button_label") or "Open Ticket")[:80]
+            profile["panel_button_emoji"] = profile.get("panel_button_emoji") or "\N{ENVELOPE WITH DOWNWARDS ARROW ABOVE}"
+            profile["panel_button_style"] = TicketHub._parse_button_style(profile.get("panel_button_style"))
+            profile["panel_dropdown_placeholder"] = str(
+                profile.get("panel_dropdown_placeholder") or "Open a ticket...",
+            )[:100]
+            profile["panel_dropdown_label"] = str(
+                profile.get("panel_dropdown_label") or profile["panel_button_label"] or "Open Ticket",
+            )[:100]
+            profile["panel_dropdown_emoji"] = (
+                profile.get("panel_dropdown_emoji")
+                or profile.get("panel_button_emoji")
+                or "\N{ENVELOPE WITH DOWNWARDS ARROW ABOVE}"
+            )
+            profile["panel_dropdown_description"] = (
+                str(profile.get("panel_dropdown_description") or "").strip()[:100] or None
+            )
             for key, default, allowed in (
                 ("form_mode", "modal", {"modal", "text", "reaction"}),
                 ("control_mode", "buttons", {"buttons", "text", "reaction"}),
@@ -2026,12 +2126,61 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
                 "Panel style must be `button`, `dropdown`, `text`, or `reaction`.",
             ) from exc
 
-    def _panel_view_for_style(self, style: Any) -> discord.ui.View | None:
-        if self._panel_style(style) in {"text", "reaction"}:
+    def _panel_view_for_style(self, style: Any, profile: ProfileRecord | None = None) -> discord.ui.View | None:
+        parsed_style = self._panel_style(style)
+        if parsed_style in {"text", "reaction"}:
             return None
-        if self._panel_style(style) == "dropdown":
-            return self._panel_select_view
-        return self._panel_view
+        if profile is None:
+            if parsed_style == "dropdown":
+                return self._panel_select_view
+            return self._panel_view
+
+        if parsed_style == "dropdown":
+            placeholder = str(profile.get("panel_dropdown_placeholder") or "Open a ticket...")[:100]
+            label = str(profile.get("panel_dropdown_label") or profile.get("panel_button_label") or "Open Ticket")[:100]
+            emoji = (
+                profile.get("panel_dropdown_emoji")
+                or profile.get("panel_button_emoji")
+                or "\N{ENVELOPE WITH DOWNWARDS ARROW ABOVE}"
+            )
+            description = str(profile.get("panel_dropdown_description") or "").strip()[:100] or None
+            if (
+                placeholder == "Open a ticket..."
+                and label == "Open Ticket"
+                and emoji == "\N{ENVELOPE WITH DOWNWARDS ARROW ABOVE}"
+                and description is None
+            ):
+                return self._panel_select_view
+            return TicketPanelSelectView(
+                self,
+                placeholder=placeholder,
+                label=label,
+                emoji=emoji,
+                description=description,
+            )
+
+        label = str(profile.get("panel_button_label") or "Open Ticket")[:80]
+        emoji = profile.get("panel_button_emoji") or "\N{ENVELOPE WITH DOWNWARDS ARROW ABOVE}"
+        raw_style = str(profile.get("panel_button_style") or "primary").lower()
+        style_map = {
+            "primary": discord.ButtonStyle.primary,
+            "secondary": discord.ButtonStyle.secondary,
+            "success": discord.ButtonStyle.success,
+            "danger": discord.ButtonStyle.danger,
+        }
+        button_style = style_map.get(raw_style, discord.ButtonStyle.primary)
+        if (
+            label == "Open Ticket"
+            and emoji == "\N{ENVELOPE WITH DOWNWARDS ARROW ABOVE}"
+            and button_style == discord.ButtonStyle.primary
+        ):
+            return self._panel_view
+        return TicketPanelView(
+            self,
+            label=label,
+            emoji=emoji,
+            style=button_style,
+        )
 
     @classmethod
     def _sanitize_multi_panel_record(
@@ -2959,19 +3108,28 @@ class TicketHub(AlternativeInteractions, DashboardIntegration, commands.Cog):
         embed = discord.Embed(
             title=str(profile.get("panel_title") or "Need Help?"),
             description=str(
-                profile.get("panel_message") or "Open a ticket for support.",
+                profile.get("panel_message") or "Open a ticket and staff will help you as soon as possible.",
             ),
-            color=self.DEFAULT_COLOR,
+            color=self._sanitize_panel_color(profile.get("panel_color")) or self.DEFAULT_COLOR,
             timestamp=self._now(),
         )
-        embed.add_field(name="Profile", value=f"`{profile_name}`", inline=True)
-        max_open = int(profile.get("max_open_tickets_by_member") or 0)
-        embed.add_field(name="Max Open", value=str(max_open), inline=True)
-        if guild.icon:
+        if profile.get("panel_show_details", True):
+            embed.add_field(name="Profile", value=f"`{profile_name}`", inline=True)
+            max_open = int(profile.get("max_open_tickets_by_member") or 0)
+            embed.add_field(name="Max Open", value=str(max_open), inline=True)
+        thumbnail_url = str(profile.get("panel_thumbnail_url") or "").strip()
+        if thumbnail_url:
+            embed.set_thumbnail(url=thumbnail_url)
+        elif guild.icon:
             embed.set_author(name=guild.name, icon_url=guild.icon.url)
         else:
             embed.set_author(name=guild.name)
-        embed.set_footer(text="TicketHub")
+        image_url = str(profile.get("panel_image_url") or "").strip()
+        if image_url:
+            embed.set_image(url=image_url)
+        footer_text = str(profile.get("panel_footer") or "TicketHub").strip()
+        if footer_text:
+            embed.set_footer(text=footer_text[:2048])
         return embed
 
     async def _send_log(
@@ -6200,7 +6358,7 @@ search.addEventListener('input', () => {{
         try:
             message = await channel.send(
                 embed=embed,
-                view=self._panel_view_for_style(style),
+                view=self._panel_view_for_style(style, profile=profile),
             )
         except discord.HTTPException as exc:
             raise commands.CommandError("I could not post the ticket panel.") from exc
@@ -6249,7 +6407,7 @@ search.addEventListener('input', () => {{
         if style == "reaction":
             self._check_reaction_channel(message.channel)
         try:
-            await message.edit(view=self._panel_view_for_style(style))
+            await message.edit(view=self._panel_view_for_style(style, profile=profile))
         except discord.HTTPException as exc:
             raise commands.CommandError(
                 "I could not attach the ticket panel to that message.",
@@ -6954,6 +7112,94 @@ search.addEventListener('input', () => {{
             if not stored_profiles:
                 stored_profiles["main"] = self._default_profile()
         await ctx.send(f"Deleted unused TicketHub profile `{clean_profile_name}`.")
+
+    @tickethub_profile.command(name="panelappearance", aliases=["panelcustom", "panelstyle"])
+    @commands.admin_or_permissions(manage_guild=True)
+    async def tickethub_profile_panel_appearance(
+        self,
+        ctx: commands.Context,
+        profile_name: str,
+        field: str,
+        *,
+        value: str | None = None,
+    ) -> None:
+        """Set panel embed and component customization fields for a profile.
+
+        Fields: title, message, color, footer, image, thumbnail, showdetails,
+        buttonlabel, buttonemoji, buttonstyle, placeholder, dropdownlabel,
+        dropdownemoji, description.
+        Pass `none` or `clear` to reset optional fields.
+        """
+        assert ctx.guild is not None
+        profile_name = self._clean_name(profile_name)
+        profile = await self._ensure_profile(ctx.guild, profile_name)
+        field_lower = field.lower().replace("_", "").replace("-", "")
+        cleaned_val = (value or "").strip()
+        is_clear = cleaned_val.lower() in {"none", "clear", "reset", "off", "default"}
+
+        if field_lower == "title":
+            profile["panel_title"] = "Need Help?" if is_clear else cleaned_val[:256]
+            display = f"Panel title set to: {profile['panel_title']}"
+        elif field_lower in {"message", "desc"}:
+            default_msg = "Open a ticket and staff will help you as soon as possible."
+            profile["panel_message"] = default_msg if is_clear else cleaned_val[:2048]
+            display = f"Panel message updated for `{profile_name}`."
+        elif field_lower == "color":
+            if is_clear:
+                profile["panel_color"] = None
+                display = f"Panel color reset to default for `{profile_name}`."
+            else:
+                color_int = self._sanitize_panel_color(cleaned_val)
+                if color_int is None:
+                    await ctx.send("Use a valid hex color like `#5865F2`.")
+                    return
+                profile["panel_color"] = color_int
+                display = f"Panel color set to `#{color_int:06X}` for `{profile_name}`."
+        elif field_lower == "footer":
+            profile["panel_footer"] = "TicketHub" if is_clear else cleaned_val[:2048]
+            display = f"Panel footer set to: {profile['panel_footer']}"
+        elif field_lower in {"image", "imageurl"}:
+            profile["panel_image_url"] = None if is_clear else cleaned_val
+            display = f"Panel image URL {'cleared' if is_clear else f'set to: {cleaned_val}'}."
+        elif field_lower in {"thumbnail", "thumbnailurl"}:
+            profile["panel_thumbnail_url"] = None if is_clear else cleaned_val
+            display = f"Panel thumbnail URL {'cleared (using server icon)' if is_clear else f'set to: {cleaned_val}'}."
+        elif field_lower in {"showdetails", "details"}:
+            show = cleaned_val.lower() not in {"false", "0", "no", "off", "hide"}
+            profile["panel_show_details"] = show
+            display = f"Panel embed details (profile & max open) are now {'shown' if show else 'hidden'}."
+        elif field_lower in {"buttonlabel", "label"}:
+            profile["panel_button_label"] = "Open Ticket" if is_clear else cleaned_val[:80]
+            display = f"Panel button label set to: {profile['panel_button_label']}"
+        elif field_lower in {"buttonemoji", "emoji"}:
+            profile["panel_button_emoji"] = "\N{ENVELOPE WITH DOWNWARDS ARROW ABOVE}" if is_clear else cleaned_val
+            display = f"Panel button emoji set to: {profile['panel_button_emoji']}"
+        elif field_lower in {"buttonstyle", "style"}:
+            parsed_style = self._parse_button_style(cleaned_val)
+            profile["panel_button_style"] = parsed_style
+            display = f"Panel button style set to: **{parsed_style}**"
+        elif field_lower in {"placeholder", "dropdownplaceholder"}:
+            profile["panel_dropdown_placeholder"] = "Open a ticket..." if is_clear else cleaned_val[:100]
+            display = f"Panel dropdown placeholder set to: {profile['panel_dropdown_placeholder']}"
+        elif field_lower in {"dropdownlabel", "optionlabel"}:
+            profile["panel_dropdown_label"] = "Open Ticket" if is_clear else cleaned_val[:100]
+            display = f"Panel dropdown option label set to: {profile['panel_dropdown_label']}"
+        elif field_lower in {"dropdownemoji", "optionemoji"}:
+            profile["panel_dropdown_emoji"] = "\N{ENVELOPE WITH DOWNWARDS ARROW ABOVE}" if is_clear else cleaned_val
+            display = f"Panel dropdown option emoji set to: {profile['panel_dropdown_emoji']}"
+        elif field_lower in {"dropdowndescription", "optiondescription", "description"}:
+            profile["panel_dropdown_description"] = None if is_clear else cleaned_val[:100]
+            display = f"Panel dropdown option description {'cleared' if is_clear else f'set to: {cleaned_val[:100]}'}"
+        else:
+            await ctx.send(
+                "Unknown field. Available fields: `title`, `message`, `color`, `footer`, "
+                "`image`, `thumbnail`, `showdetails`, `buttonlabel`, `buttonemoji`, "
+                "`buttonstyle`, `placeholder`, `dropdownlabel`, `dropdownemoji`, `description`.",
+            )
+            return
+
+        await self._set_profile(ctx.guild, profile_name, profile)
+        await ctx.send(display)
 
     @tickethub_set.command(name="channelname", aliases=["channeltemplate"])
     @commands.admin_or_permissions(manage_guild=True)

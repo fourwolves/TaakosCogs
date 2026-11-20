@@ -608,3 +608,242 @@ def test_dm_intake_skips_text_display_prompts():
         assert kwargs["form_answers"] == [{"label": "Reason", "value": "Issue details"}]
 
     asyncio.run(run())
+
+
+
+def test_panel_embed_customization():
+    instance = cog()
+    guild = SimpleNamespace(name="Support Guild", icon=None)
+    profile = {
+        "panel_title": "Custom Help Desk",
+        "panel_message": "Click below to contact an agent.",
+        "panel_color": "#FF5733",
+        "panel_footer": "24/7 Support",
+        "panel_thumbnail_url": "https://example.com/thumb.png",
+        "panel_image_url": "https://example.com/banner.png",
+        "panel_show_details": False,
+    }
+    embed = instance._panel_embed(guild, "vip", profile)
+    assert embed.title == "Custom Help Desk"
+    assert embed.description == "Click below to contact an agent."
+    assert embed.color.value == 0xFF5733
+    assert embed.footer.text == "24/7 Support"
+    assert embed.thumbnail.url == "https://example.com/thumb.png"
+    assert embed.image.url == "https://example.com/banner.png"
+    assert len(embed.fields) == 0
+
+    profile["panel_show_details"] = True
+    profile["max_open_tickets_by_member"] = 3
+    embed_with_details = instance._panel_embed(guild, "vip", profile)
+    assert len(embed_with_details.fields) == 2
+    assert embed_with_details.fields[0].name == "Profile"
+    assert embed_with_details.fields[0].value == "`vip`"
+    assert embed_with_details.fields[1].name == "Max Open"
+    assert embed_with_details.fields[1].value == "3"
+
+
+def test_panel_view_for_style_custom_button():
+    instance = cog()
+    instance._panel_view = SimpleNamespace(is_default=True)
+    instance._panel_select_view = SimpleNamespace(is_default=True)
+
+    profile = {
+        "panel_button_label": "Create Ticket",
+        "panel_button_emoji": "🎫",
+        "panel_button_style": "danger",
+    }
+    view = instance._panel_view_for_style("button", profile)
+    button = view.children[0]
+    assert button.label == "Create Ticket"
+    assert button.emoji.name == "🎫"
+    assert button.style == discord.ButtonStyle.danger
+    assert button.custom_id == "taakoscogs:tickethub:open"
+
+    default_profile = instance._default_profile()
+    assert instance._panel_view_for_style("button", default_profile) is instance._panel_view
+
+
+def test_panel_view_for_style_custom_dropdown():
+    instance = cog()
+    instance._panel_view = SimpleNamespace(is_default=True)
+    instance._panel_select_view = SimpleNamespace(is_default=True)
+
+    profile = {
+        "panel_dropdown_placeholder": "Select your issue...",
+        "panel_dropdown_label": "Billing Inquiry",
+        "panel_dropdown_emoji": "💳",
+        "panel_dropdown_description": "Invoices and payments",
+    }
+    view = instance._panel_view_for_style("dropdown", profile)
+    select = view.children[0]
+    assert select.placeholder == "Select your issue..."
+    assert select.custom_id == "taakoscogs:tickethub:open-select"
+    assert len(select.options) == 1
+    assert select.options[0].label == "Billing Inquiry"
+    assert select.options[0].emoji.name == "💳"
+    assert select.options[0].description == "Invoices and payments"
+
+    default_profile = instance._default_profile()
+    assert instance._panel_view_for_style("dropdown", default_profile) is instance._panel_select_view
+
+
+def test_ticketset_profile_panelappearance_command():
+    async def run():
+        instance = cog()
+        profile = instance._default_profile()
+        instance._ensure_profile = AsyncMock(return_value=profile)
+        instance._set_profile = AsyncMock()
+        ctx = SimpleNamespace(guild=SimpleNamespace(id=1), send=AsyncMock())
+        cmd = instance.tickethub_profile_panel_appearance.callback
+
+        await cmd(instance, ctx, "main", "color", value="#FF0000")
+        assert profile["panel_color"] == 0xFF0000
+        ctx.send.assert_awaited_with("Panel color set to `#FF0000` for `main`.")
+
+        await cmd(instance, ctx, "main", "color", value="none")
+        assert profile["panel_color"] is None
+
+        await cmd(instance, ctx, "main", "buttonstyle", value="success")
+        assert profile["panel_button_style"] == "success"
+        await cmd(instance, ctx, "main", "buttonlabel", value="Need Support")
+        assert profile["panel_button_label"] == "Need Support"
+
+        await cmd(instance, ctx, "main", "showdetails", value="off")
+        assert profile["panel_show_details"] is False
+
+    asyncio.run(run())
+
+
+
+def test_dashboard_modal_section_attributes_and_script():
+    instance = cog()
+    profile = instance._default_profile()
+    profile["creating_modal"] = [
+        {"label": "Summary", "type": "text", "style": 1, "required": True},
+    ]
+    html = instance._dashboard_modal_section("main", profile, "<csrf>")
+    assert 'data-modal-card="1"' in html
+    assert 'data-modal-enabled="1"' in html
+    assert 'data-modal-type-select="1"' in html
+    assert 'data-modal-field="style"' in html
+    assert 'data-modal-field="text_length"' in html
+    assert 'data-modal-field="choices"' in html
+    assert 'data-modal-add-form="1"' in html
+
+    script = instance._dashboard_tabs_script()
+    assert "updateModalCard" in script
+    assert "updatePanelStyle" in script
+    assert "data-modal-type-select" in script
+    assert "data-panel-style-select" in script
+
+
+def test_dashboard_add_modal_question_min_max_length():
+    async def run():
+        instance = cog()
+        profile = instance._default_profile()
+        instance._ensure_profile = AsyncMock(return_value=profile)
+        instance._set_profile = AsyncMock()
+
+        form_data = {
+            "selected_profile": "main",
+            "add_modal_label": "Description",
+            "add_modal_type": "text",
+            "add_modal_style": "paragraph",
+            "add_modal_required": "1",
+            "add_modal_min_length": "10",
+            "add_modal_max_length": "500",
+        }
+        await instance._dashboard_add_modal_question(SimpleNamespace(id=1), form_data)
+        saved_fields = profile["creating_modal"]
+        assert len(saved_fields) == 1
+        assert saved_fields[0]["label"] == "Description"
+        assert saved_fields[0]["min_length"] == 10
+        assert saved_fields[0]["max_length"] == 500
+
+    asyncio.run(run())
+
+
+def test_dashboard_panels_section_customization_fields():
+    instance = cog()
+    profile = instance._default_profile()
+    profile["panel_color"] = 0x5865F2
+    profile["panel_button_style"] = "success"
+    html = instance._dashboard_panels_section(
+        SimpleNamespace(text_channels=[]),
+        "main",
+        profile,
+        {},
+        "<csrf>",
+    )
+    assert 'data-panel-form="1"' in html
+    assert 'data-panel-style-select="1"' in html
+    assert 'data-panel-component="button"' in html
+    assert 'data-panel-component="dropdown"' in html
+    assert 'name="post_panel_title"' in html
+    assert 'name="post_panel_color"' in html
+    assert 'name="post_panel_button_style"' in html
+    assert 'name="post_panel_dropdown_placeholder"' in html
+
+
+def test_dashboard_post_panel_updates_profile():
+    async def run():
+        instance = cog()
+        profile = instance._default_profile()
+        instance._ensure_profile = AsyncMock(return_value=profile)
+        channel = Mock(spec=discord.TextChannel, id=123, mention="#support")
+        guild = SimpleNamespace(id=1, get_channel=lambda cid: channel if cid == 123 else None)
+        message = SimpleNamespace(id=456)
+        instance._post_panel = AsyncMock(return_value=message)
+        instance.config = SimpleNamespace(guild=lambda _: SimpleNamespace(enabled=SimpleNamespace(set=AsyncMock())))
+
+        form_data = {
+            "selected_profile": "main",
+            "post_panel_channel_id": "123",
+            "post_panel_style": "button",
+            "post_panel_title": "VIP Support",
+            "post_panel_color": "#00FF00",
+            "post_panel_button_label": "Open VIP Ticket",
+            "post_panel_button_style": "danger",
+            "post_panel_show_details": "0",
+        }
+        name, msg = await instance._dashboard_post_panel(guild, form_data)
+        assert name == "main"
+        assert msg is message
+        assert profile["panel_title"] == "VIP Support"
+        assert profile["panel_color"] == 0x00FF00
+        assert profile["panel_button_label"] == "Open VIP Ticket"
+        assert profile["panel_button_style"] == "danger"
+        assert profile["panel_show_details"] is False
+
+    asyncio.run(run())
+
+
+def test_dashboard_save_multi_panel_posts_new_message():
+    async def run():
+        instance = cog()
+        sent_message = SimpleNamespace(id=999, channel=SimpleNamespace(id=123))
+        channel = Mock(spec=discord.TextChannel, id=123, send=AsyncMock(return_value=sent_message))
+        guild = SimpleNamespace(id=1, icon=None, name="Guild", get_channel=lambda cid: channel if cid == 123 else None)
+        instance._get_profiles = AsyncMock(return_value={"main": instance._default_profile()})
+        instance._save_multi_panel = AsyncMock()
+        instance._set_profile = AsyncMock()
+        instance.config = SimpleNamespace(guild=lambda _: SimpleNamespace(enabled=SimpleNamespace(set=AsyncMock())))
+
+        form_data = {
+            "multi_panel_channel_id": "123",
+            "multi_panel_message_id": "",
+            "multi_panel_title": "Multi Help",
+            "multi_panel_message": "Pick an option",
+            "multi_panel_color": "#123456",
+            "multi_panel_style": "dropdown",
+            "multi_panel_options": "main | 🎫 | Main Support | General help",
+        }
+        msg = await instance._dashboard_save_multi_panel(guild, form_data)
+        assert msg is sent_message
+        channel.send.assert_awaited_once()
+        embed = channel.send.call_args.kwargs["embed"]
+        assert embed.title == "Multi Help"
+        assert embed.description == "Pick an option"
+        assert embed.color.value == 0x123456
+
+    asyncio.run(run())

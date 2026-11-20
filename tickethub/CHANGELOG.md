@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.20.0 - 2026-11-19
+
+- Added responsive, component-type-aware modal field visibility in the web dashboard modal builder (dynamically showing only relevant fields such as text length, choice lists, min/max values, or notice content depending on selected component type).
+- Compacted unused modal question slots with collapsible cards and live summary badges.
+- Added min and max length configuration support to the dashboard "Add Question" modal form.
+- Added comprehensive ticket panel customization options per profile: embed title, message, hex color, footer, thumbnail URL, image URL, toggleable profile details, custom button label/emoji/style, and dropdown placeholder/label/emoji/description.
+- Updated `[p]ticketset profile panelappearance` CLI command to configure all panel embed and component customization fields.
+- Added in-form panel customization controls to the web dashboard Panels and Profile Setup tabs, with dynamic button/dropdown field switching based on selected panel style.
+- Allowed posting new multi-panel messages directly from the web dashboard by specifying a destination channel without requiring an existing message ID.
+
 ## 1.19.0 - 2026-11-19
 
 - Added support for all Discord Components V2 modal types: TextDisplay, UserSelect, RoleSelect, MentionableSelect, ChannelSelect, FileUpload, RadioGroup, CheckboxGroup, Checkbox, and Label descriptions.

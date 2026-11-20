@@ -11,6 +11,8 @@ from redbot.core import commands
 
 log = logging.getLogger("red.taakoscogs.tickethub.dashboard")
 
+DEFAULT_PANEL_BUTTON_EMOJI = "\N{ENVELOPE WITH DOWNWARDS ARROW ABOVE}"
+
 
 def dashboard_page(*args, **kwargs):
     """Dashboard page decorator compatible with Red-Web-Dashboard."""
@@ -331,6 +333,87 @@ class DashboardIntegration:
       });
     });
   }
+
+  const updateModalCard = (card) => {
+    const typeSelect = card.querySelector("[data-modal-type-select]");
+    const enabledCheck = card.querySelector("[data-modal-enabled]");
+    const fieldsWrap = card.querySelector("[data-modal-fields]");
+    const summaryBadge = card.querySelector("[data-modal-summary]");
+    const labelInput = card.querySelector('input[name$="_label"]');
+
+    if (enabledCheck && fieldsWrap) {
+      const isEnabled = enabledCheck.checked;
+      card.classList.toggle("is-disabled", !isEnabled);
+      fieldsWrap.style.display = isEnabled ? "" : "none";
+    }
+
+    if (!typeSelect) return;
+    const type = typeSelect.value;
+
+    if (summaryBadge) {
+      const label = labelInput?.value.trim() || "Untitled";
+      const isEnabled = enabledCheck ? enabledCheck.checked : true;
+      summaryBadge.textContent = isEnabled ? `${label} • ${type}` : "Disabled";
+    }
+
+    const show = (selector, condition) => {
+      card.querySelectorAll(selector).forEach((el) => {
+        el.style.display = condition ? "" : "none";
+      });
+    };
+
+    show('[data-modal-field="style"]', type === "text");
+    show('[data-modal-field="description"]', type !== "text_display");
+    show('[data-modal-field="required"]', type !== "text_display");
+    show('[data-modal-field="placeholder"]', ["text", "choice", "user", "role", "mentionable", "channel"].includes(type));
+    show('[data-modal-field="default"]', type !== "file");
+
+    const defaultLabel = card.querySelector('[data-modal-field="default"] label');
+    if (defaultLabel) {
+      if (type === "text_display") {
+        defaultLabel.textContent = "Notice Content / Display Text";
+      } else if (type === "boolean" || type === "checkbox") {
+        defaultLabel.textContent = "Default (true / false)";
+      } else {
+        defaultLabel.textContent = "Default Value";
+      }
+    }
+
+    show('[data-modal-field="text_length"]', type === "text");
+    show(
+      '[data-modal-field="values_count"]',
+      ["choice", "checkbox_group", "user", "role", "mentionable", "channel", "file"].includes(type),
+    );
+    show('[data-modal-field="choices"]', ["choice", "radio", "checkbox_group"].includes(type));
+  };
+
+  root.querySelectorAll("[data-modal-card]").forEach((card) => {
+    updateModalCard(card);
+    card.addEventListener("change", () => updateModalCard(card));
+    card.addEventListener("input", () => updateModalCard(card));
+  });
+
+  const addForm = root.querySelector("[data-modal-add-form]");
+  if (addForm) {
+    updateModalCard(addForm);
+    addForm.addEventListener("change", () => updateModalCard(addForm));
+    addForm.addEventListener("input", () => updateModalCard(addForm));
+  }
+
+  const updatePanelStyle = (form) => {
+    const styleSelect = form.querySelector("[data-panel-style-select]");
+    if (!styleSelect) return;
+    const style = styleSelect.value;
+    const btnRow = form.querySelector('[data-panel-component="button"]');
+    const dropRow = form.querySelector('[data-panel-component="dropdown"]');
+    if (btnRow) btnRow.style.display = style === "button" ? "" : "none";
+    if (dropRow) dropRow.style.display = style === "dropdown" ? "" : "none";
+  };
+
+  root.querySelectorAll("[data-panel-form]").forEach((form) => {
+    updatePanelStyle(form);
+    form.addEventListener("change", () => updatePanelStyle(form));
+  });
 })();
 </script>
 """
@@ -366,6 +449,13 @@ class DashboardIntegration:
             value = self._dash_value(form_data, key, "on").lower()
             return value not in {"0", "false", "off", "no", ""}
         return False
+
+    def _color_hex(self, value: typing.Any) -> str:
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            number = self.DEFAULT_COLOR
+        return f"#{number:06X}"
 
     def _dash_int(
         self,
@@ -772,6 +862,32 @@ class DashboardIntegration:
             self._clean_modal_text(self._dash_value(form_data, "panel_message"), 2048)
             or "Open a ticket and staff will help you as soon as possible."
         )
+        profile["panel_color"] = self._sanitize_panel_color(self._dash_value(form_data, "panel_color"))
+        profile["panel_footer"] = self._clean_modal_text(self._dash_value(form_data, "panel_footer"), 2048) or "TicketHub"
+        profile["panel_image_url"] = self._dash_value(form_data, "panel_image_url").strip() or None
+        profile["panel_thumbnail_url"] = self._dash_value(form_data, "panel_thumbnail_url").strip() or None
+        profile["panel_show_details"] = self._dash_bool(form_data, "panel_show_details")
+        profile["panel_button_label"] = (
+            self._clean_modal_text(self._dash_value(form_data, "panel_button_label"), 80) or "Open Ticket"
+        )
+        profile["panel_button_emoji"] = self._dash_value(form_data, "panel_button_emoji").strip() or DEFAULT_PANEL_BUTTON_EMOJI
+        profile["panel_button_style"] = self._parse_button_style(self._dash_value(form_data, "panel_button_style", "primary"))
+        profile["panel_dropdown_placeholder"] = (
+            self._clean_modal_text(self._dash_value(form_data, "panel_dropdown_placeholder"), 100) or "Open a ticket..."
+        )
+        profile["panel_dropdown_label"] = (
+            self._clean_modal_text(self._dash_value(form_data, "panel_dropdown_label"), 100)
+            or profile["panel_button_label"]
+            or "Open Ticket"
+        )
+        profile["panel_dropdown_emoji"] = (
+            self._dash_value(form_data, "panel_dropdown_emoji").strip()
+            or profile["panel_button_emoji"]
+            or DEFAULT_PANEL_BUTTON_EMOJI
+        )
+        profile["panel_dropdown_description"] = (
+            self._clean_modal_text(self._dash_value(form_data, "panel_dropdown_description"), 100) or None
+        )
         profile["welcome_message"] = self._clean_modal_text(
             self._dash_value(form_data, "welcome_message"),
             1900,
@@ -996,6 +1112,20 @@ class DashboardIntegration:
 
         style_name = self._dash_value(form_data, "add_modal_style")
         style = discord.TextStyle.short.value if style_name == "short" else discord.TextStyle.paragraph.value
+        min_length = self._dash_int(
+            form_data,
+            "add_modal_min_length",
+            minimum=0,
+            maximum=4000,
+            optional=True,
+        )
+        max_length = self._dash_int(
+            form_data,
+            "add_modal_max_length",
+            minimum=1,
+            maximum=4000,
+            optional=True,
+        )
         min_values = self._dash_int(
             form_data,
             "add_modal_min_values",
@@ -1025,8 +1155,8 @@ class DashboardIntegration:
                     self._dash_value(form_data, "add_modal_placeholder"),
                     100,
                 ),
-                "min_length": None,
-                "max_length": None,
+                "min_length": min_length,
+                "max_length": max_length,
                 "min_values": min_values,
                 "max_values": max_values,
                 "choices": choices,
@@ -1077,6 +1207,59 @@ class DashboardIntegration:
         style = self._parse_panel_style(
             self._dash_value(form_data, "post_panel_style", profile.get("panel_style")),
         )
+        if "post_panel_title" in form_data:
+            profile["panel_title"] = (
+                self._clean_modal_text(self._dash_value(form_data, "post_panel_title"), 256)
+                or profile.get("panel_title")
+                or "Need Help?"
+            )
+        if "post_panel_message" in form_data:
+            profile["panel_message"] = (
+                self._clean_modal_text(self._dash_value(form_data, "post_panel_message"), 2048)
+                or profile.get("panel_message")
+                or "Open a ticket and staff will help you as soon as possible."
+            )
+        if "post_panel_color" in form_data:
+            profile["panel_color"] = self._sanitize_panel_color(self._dash_value(form_data, "post_panel_color"))
+        if "post_panel_footer" in form_data:
+            profile["panel_footer"] = (
+                self._clean_modal_text(self._dash_value(form_data, "post_panel_footer"), 2048) or "TicketHub"
+            )
+        if "post_panel_image_url" in form_data:
+            profile["panel_image_url"] = self._dash_value(form_data, "post_panel_image_url").strip() or None
+        if "post_panel_thumbnail_url" in form_data:
+            profile["panel_thumbnail_url"] = self._dash_value(form_data, "post_panel_thumbnail_url").strip() or None
+        if "post_panel_show_details" in form_data or "post_panel_title" in form_data:
+            profile["panel_show_details"] = self._dash_bool(form_data, "post_panel_show_details")
+        if "post_panel_button_label" in form_data:
+            profile["panel_button_label"] = (
+                self._clean_modal_text(self._dash_value(form_data, "post_panel_button_label"), 80) or "Open Ticket"
+            )
+        if "post_panel_button_emoji" in form_data:
+            profile["panel_button_emoji"] = (
+                self._dash_value(form_data, "post_panel_button_emoji").strip() or DEFAULT_PANEL_BUTTON_EMOJI
+            )
+        if "post_panel_button_style" in form_data:
+            profile["panel_button_style"] = self._parse_button_style(
+                self._dash_value(form_data, "post_panel_button_style", "primary"),
+            )
+        if "post_panel_dropdown_placeholder" in form_data:
+            profile["panel_dropdown_placeholder"] = (
+                self._clean_modal_text(self._dash_value(form_data, "post_panel_dropdown_placeholder"), 100) or "Open a ticket..."
+            )
+        if "post_panel_dropdown_label" in form_data:
+            profile["panel_dropdown_label"] = (
+                self._clean_modal_text(self._dash_value(form_data, "post_panel_dropdown_label"), 100) or "Open Ticket"
+            )
+        if "post_panel_dropdown_emoji" in form_data:
+            profile["panel_dropdown_emoji"] = (
+                self._dash_value(form_data, "post_panel_dropdown_emoji").strip() or DEFAULT_PANEL_BUTTON_EMOJI
+            )
+        if "post_panel_dropdown_description" in form_data:
+            profile["panel_dropdown_description"] = (
+                self._clean_modal_text(self._dash_value(form_data, "post_panel_dropdown_description"), 100) or None
+            )
+
         message = await self._post_panel(guild, profile_name, profile, channel, style)
         await self.config.guild(guild).enabled.set(True)
         return profile_name, message
@@ -1144,15 +1327,44 @@ class DashboardIntegration:
         guild: discord.Guild,
         form_data: typing.Any,
     ) -> discord.Message:
-        message = await self._dashboard_fetch_message(
-            guild,
-            self._dash_value(form_data, "multi_panel_channel_id"),
-            self._dash_value(form_data, "multi_panel_message_id"),
-        )
-        if guild.me is None or message.author.id != guild.me.id:
-            raise commands.BadArgument(
-                "I can only manage multi-panels on messages sent by this bot.",
+        channel_id_val = self._dash_value(form_data, "multi_panel_channel_id").strip()
+        message_id_val = self._dash_value(form_data, "multi_panel_message_id").strip()
+        if not message_id_val:
+            channel_id = self._dash_optional_id(form_data, "multi_panel_channel_id")
+            channel = guild.get_channel(channel_id) if channel_id else None
+            if not isinstance(channel, discord.TextChannel):
+                raise commands.BadArgument("Choose a valid text channel to post the multi-panel.")
+            title = self._clean_modal_text(self._dash_value(form_data, "multi_panel_title"), 256) or "Need Help?"
+            description = (
+                self._clean_modal_text(self._dash_value(form_data, "multi_panel_message"), 2048)
+                or "Select an option below to open a ticket."
             )
+            color = self._sanitize_panel_color(self._dash_value(form_data, "multi_panel_color")) or self.DEFAULT_COLOR
+            embed = discord.Embed(
+                title=title,
+                description=description,
+                color=color,
+                timestamp=self._now(),
+            )
+            if guild.icon:
+                embed.set_author(name=guild.name, icon_url=guild.icon.url)
+            else:
+                embed.set_author(name=guild.name)
+            embed.set_footer(text="TicketHub")
+            try:
+                message = await channel.send(embed=embed)
+            except discord.HTTPException as exc:
+                raise commands.CommandError("I could not post the multi-panel message.") from exc
+        else:
+            message = await self._dashboard_fetch_message(
+                guild,
+                channel_id_val,
+                message_id_val,
+            )
+            if guild.me is None or message.author.id != guild.me.id:
+                raise commands.BadArgument(
+                    "I can only manage multi-panels on messages sent by this bot.",
+                )
 
         profiles = await self._get_profiles(guild)
         options = []
@@ -1596,6 +1808,10 @@ class DashboardIntegration:
             .th-actions {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }}
             .th-actions form {{ margin: 0; }}
             .th-reply textarea {{ min-height: 120px; }}
+            .th-modal-card {{ transition: opacity 0.2s ease; }}
+            .th-modal-card.is-disabled {{ opacity: 0.65; border-color: #2a3441; }}
+            .th-modal-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }}
+            .th-modal-badge {{ font-size: 0.75rem; text-transform: none; color: #9ca3af; }}
         </style>
         <div class="th-wrap" data-dashboard-tabs="1">
             <div class="th-card">
@@ -1835,9 +2051,67 @@ class DashboardIntegration:
         }
                     {self._role_select(guild, "ticket_role_id", "Ticket Role", profile.get("ticket_role_id"))}
                 </div>
+                <h3>Panel Appearance</h3>
                 <div class="th-row">
                     {self._textarea("panel_title", "Panel Title", profile.get("panel_title") or "Need Help?", rows=2)}
-                    {self._textarea("panel_message", "Panel Message", profile.get("panel_message") or "", rows=3)}
+                    {self._textarea("panel_message", "Panel Message", profile.get("panel_message") or "", rows=2)}
+                    {
+            self._input(
+                "panel_color",
+                "Embed Color (Hex, e.g. #5865F2)",
+                self._color_hex(profile.get("panel_color")) if profile.get("panel_color") is not None else "",
+            )
+        }
+                    {self._input("panel_footer", "Footer Text", profile.get("panel_footer") or "TicketHub")}
+                </div>
+                <div class="th-row">
+                    {
+            self._input(
+                "panel_thumbnail_url",
+                "Thumbnail URL (optional, defaults to server icon)",
+                profile.get("panel_thumbnail_url") or "",
+            )
+        }
+                    {self._input("panel_image_url", "Main Image URL (optional)", profile.get("panel_image_url") or "")}
+                    <label class="th-check"><input type="checkbox" name="panel_show_details" value="1" {
+            self._checked(profile.get("panel_show_details", True))
+        }> Show Profile & Max Open in Embed</label>
+                </div>
+                <div class="th-row">
+                    {self._input("panel_button_label", "Button Label", profile.get("panel_button_label") or "Open Ticket")}
+                    {
+            self._input("panel_button_emoji", "Button Emoji", profile.get("panel_button_emoji") or DEFAULT_PANEL_BUTTON_EMOJI)
+        }
+                    <div class="th-field"><label>Button Style</label><select name="panel_button_style">{
+            self._option("primary", "Primary (Blurple)", profile.get("panel_button_style", "primary"))
+        }{self._option("secondary", "Secondary (Grey)", profile.get("panel_button_style"))}{
+            self._option("success", "Success (Green)", profile.get("panel_button_style"))
+        }{self._option("danger", "Danger (Red)", profile.get("panel_button_style"))}</select></div>
+                </div>
+                <div class="th-row">
+                    {
+            self._input(
+                "panel_dropdown_placeholder",
+                "Dropdown Placeholder",
+                profile.get("panel_dropdown_placeholder") or "Open a ticket...",
+            )
+        }
+                    {
+            self._input("panel_dropdown_label", "Dropdown Option Label", profile.get("panel_dropdown_label") or "Open Ticket")
+        }
+                    {
+            self._input(
+                "panel_dropdown_emoji", "Dropdown Option Emoji", profile.get("panel_dropdown_emoji") or DEFAULT_PANEL_BUTTON_EMOJI
+            )
+        }
+                    {
+            self._input(
+                "panel_dropdown_description", "Dropdown Option Description", profile.get("panel_dropdown_description") or ""
+            )
+        }
+                </div>
+                <h3>Messages</h3>
+                <div class="th-row">
                     {self._textarea("welcome_message", "Welcome Message", profile.get("welcome_message") or "", rows=3)}
                     {self._textarea("custom_message", "Custom Message", profile.get("custom_message") or "", rows=3)}
                 </div>
@@ -1879,75 +2153,102 @@ class DashboardIntegration:
             field = fields[index] if index < len(fields) else {}
             field_type = field.get("type") or "text"
             style = "short" if int(field.get("style") or 2) == discord.TextStyle.short.value else "paragraph"
+            is_enabled = index < len(fields)
+            summary_label = self._h(field.get("label") or "Question") if is_enabled else "Disabled"
+            summary_text = f"{summary_label} • {self._h(field_type)}" if is_enabled else "Disabled"
+            input_label = self._input(f"modal_{index}_label", "Label", field.get("label") or "")
+            input_desc = self._input(
+                f"modal_{index}_description",
+                "Label Description (optional)",
+                field.get("description") or "",
+            )
+            input_placeholder = self._input(
+                f"modal_{index}_placeholder",
+                "Placeholder",
+                field.get("placeholder") or "",
+            )
+            input_default = self._input(f"modal_{index}_default", "Default Value", field.get("default") or "")
+            input_min_len = self._input(
+                f"modal_{index}_min_length",
+                "Min Length",
+                "" if field.get("min_length") is None else field.get("min_length"),
+                "number",
+                min_value=0,
+                max_value=4000,
+            )
+            input_max_len = self._input(
+                f"modal_{index}_max_length",
+                "Max Length",
+                "" if field.get("max_length") is None else field.get("max_length"),
+                "number",
+                min_value=1,
+                max_value=4000,
+            )
+            input_min_val = self._input(
+                f"modal_{index}_min_values",
+                "Min Values",
+                "" if field.get("min_values") is None else field.get("min_values"),
+                "number",
+                min_value=0,
+                max_value=25,
+            )
+            input_max_val = self._input(
+                f"modal_{index}_max_values",
+                "Max Values",
+                "" if field.get("max_values") is None else field.get("max_values"),
+                "number",
+                min_value=1,
+                max_value=25,
+            )
+            input_choices = self._input(
+                f"modal_{index}_choices",
+                "Choices (comma-separated)",
+                ", ".join(field.get("choices") or []),
+            )
             rows.append(
                 f"""
-                <div class="th-card">
-                    <label class="th-check"><input type="checkbox" name="modal_{index}_enabled" value="1"
-                    {self._checked(index < len(fields))}> Question {index + 1}</label>
-                    <div class="th-row">
-                        {self._input(f"modal_{index}_label", "Label", field.get("label") or "")}
-                        {
-                    self._input(
-                        f"modal_{index}_description",
-                        "Label Description",
-                        field.get("description") or "",
-                    )
-                }
-                        <div class="th-field"><label>Type</label><select name="modal_{index}_type">{
-                    self._modal_type_options(field_type)
-                }</select></div>
-                        <div class="th-field"><label>Text Style</label><select
-                        name="modal_{index}_style">{self._option("paragraph", "Paragraph", style)}{
-                    self._option("short", "Short", style)
-                }</select></div>
-                        <label class="th-check"><input type="checkbox" name="modal_{index}_required" value="1"
-                        {self._checked(field.get("required", True))}> Required</label>
+                <div class="th-card th-modal-card{" is-disabled" if not is_enabled else ""}" data-modal-card="1">
+                    <div class="th-modal-header">
+                        <label class="th-check">
+                            <input type="checkbox" name="modal_{index}_enabled" value="1" data-modal-enabled="1"
+                            {self._checked(is_enabled)}> <strong>Question {index + 1}</strong>
+                        </label>
+                        <span class="th-badge th-modal-badge" data-modal-summary="1">{summary_text}</span>
                     </div>
-                    <div class="th-row">
-                        {self._input(f"modal_{index}_placeholder", "Placeholder", field.get("placeholder") or "")}
-                        {self._input(f"modal_{index}_default", "Default", field.get("default") or "")}
-                        {
-                    self._input(
-                        f"modal_{index}_min_length",
-                        "Min Length",
-                        "" if field.get("min_length") is None else field.get("min_length"),
-                        "number",
-                        min_value=0,
-                        max_value=4000,
-                    )
-                }
-                        {
-                    self._input(
-                        f"modal_{index}_max_length",
-                        "Max Length",
-                        "" if field.get("max_length") is None else field.get("max_length"),
-                        "number",
-                        min_value=1,
-                        max_value=4000,
-                    )
-                }
-                        {
-                    self._input(
-                        f"modal_{index}_min_values",
-                        "Min Values",
-                        "" if field.get("min_values") is None else field.get("min_values"),
-                        "number",
-                        min_value=0,
-                        max_value=25,
-                    )
-                }
-                        {
-                    self._input(
-                        f"modal_{index}_max_values",
-                        "Max Values",
-                        "" if field.get("max_values") is None else field.get("max_values"),
-                        "number",
-                        min_value=1,
-                        max_value=25,
-                    )
-                }
+                    <div class="th-modal-fields" data-modal-fields="1">
+                        <div class="th-row">
+                            <div data-modal-field="label">{input_label}</div>
+                            <div data-modal-field="description">{input_desc}</div>
+                            <div class="th-field" data-modal-field="type">
+                                <label>Type</label>
+                                <select name="modal_{index}_type" data-modal-type-select="1">
+                                    {self._modal_type_options(field_type)}
+                                </select>
+                            </div>
+                            <div class="th-field" data-modal-field="style">
+                                <label>Text Style</label>
+                                <select name="modal_{index}_style">
+                                    {self._option("paragraph", "Paragraph", style)}
+                                    {self._option("short", "Short", style)}
+                                </select>
+                            </div>
+                            <div data-modal-field="required">
+                                <label class="th-check">
+                                    <input type="checkbox" name="modal_{index}_required" value="1"
+                                    {self._checked(field.get("required", True))}> Required
+                                </label>
+                            </div>
+                        </div>
+                        <div class="th-row">
+                            <div data-modal-field="placeholder">{input_placeholder}</div>
+                            <div data-modal-field="default">{input_default}</div>
+                            <div data-modal-field="text_length">{input_min_len}</div>
+                            <div data-modal-field="text_length">{input_max_len}</div>
+                            <div data-modal-field="values_count">{input_min_val}</div>
+                            <div data-modal-field="values_count">{input_max_val}</div>
+                        </div>
+                        <div data-modal-field="choices">{input_choices}</div>
                     </div>
-                    {self._input(f"modal_{index}_choices", "Choices (comma-separated)", ", ".join(field.get("choices") or []))}
                 </div>
                 """,
             )
@@ -1984,30 +2285,48 @@ class DashboardIntegration:
                 <button class="th-btn" type="submit">Save Modal</button>
             </form>
             <div class="th-grid">
-                <form method="POST">
+                <form method="POST" data-modal-add-form="1">
                     {csrf}
                     <input type="hidden" name="action" value="add_modal_question">
                     <input type="hidden" name="selected_profile" value="{self._h(profile_name)}">
                     <div class="th-row">
-                        {self._input("add_modal_label", "New Question Label", "")}
-                        {self._input("add_modal_description", "Label Description (optional)", "")}
-                        <div class="th-field"><label>Type</label><select name="add_modal_type">{
-            self._modal_type_options("text")
-        }</select></div>
-                        <div class="th-field"><label>Text Style</label><select
+                        <div data-modal-field="label">{self._input("add_modal_label", "New Question Label", "")}</div>
+                        <div data-modal-field="description">{
+            self._input("add_modal_description", "Label Description (optional)", "")
+        }</div>
+                        <div class="th-field" data-modal-field="type">
+                            <label>Type</label>
+                            <select name="add_modal_type" data-modal-type-select="1">
+                                {self._modal_type_options("text")}
+                            </select>
+                        </div>
+                        <div class="th-field" data-modal-field="style"><label>Text Style</label><select
                         name="add_modal_style">{self._option("paragraph", "Paragraph", "paragraph")}{
             self._option("short", "Short", "paragraph")
         }</select></div>
-                        <label class="th-check"><input type="checkbox" name="add_modal_required" value="1" checked>
-                        Required</label>
+                        <div data-modal-field="required">
+                            <label class="th-check">
+                                <input type="checkbox" name="add_modal_required" value="1" checked> Required
+                            </label>
+                        </div>
                     </div>
                     <div class="th-row">
-                        {self._input("add_modal_placeholder", "Placeholder", "")}
-                        {self._input("add_modal_default", "Default", "")}
-                        {self._input("add_modal_min_values", "Min Values", "", "number", min_value=0, max_value=25)}
-                        {self._input("add_modal_max_values", "Max Values", "", "number", min_value=1, max_value=25)}
+                        <div data-modal-field="placeholder">{self._input("add_modal_placeholder", "Placeholder", "")}</div>
+                        <div data-modal-field="default">{self._input("add_modal_default", "Default Value", "")}</div>
+                        <div data-modal-field="text_length">{
+            self._input("add_modal_min_length", "Min Length", "", "number", min_value=0, max_value=4000)
+        }</div>
+                        <div data-modal-field="text_length">{
+            self._input("add_modal_max_length", "Max Length", "", "number", min_value=1, max_value=4000)
+        }</div>
+                        <div data-modal-field="values_count">{
+            self._input("add_modal_min_values", "Min Values", "", "number", min_value=0, max_value=25)
+        }</div>
+                        <div data-modal-field="values_count">{
+            self._input("add_modal_max_values", "Max Values", "", "number", min_value=1, max_value=25)
+        }</div>
                     </div>
-                    {self._input("add_modal_choices", "Choices (comma-separated)", "")}
+                    <div data-modal-field="choices">{self._input("add_modal_choices", "Choices (comma-separated)", "")}</div>
                     <button class="th-btn secondary" type="submit">Add Question</button>
                 </form>
                 {remove_form}
@@ -2050,16 +2369,98 @@ class DashboardIntegration:
         <div id="panels" class="th-card">
             <h3>Panels</h3>
             <div class="th-grid">
-                <form method="POST">
+                <form method="POST" data-panel-form="1">
                     {csrf}
                     <input type="hidden" name="action" value="post_panel">
                     <input type="hidden" name="selected_profile" value="{self._h(profile_name)}">
-                    {self._channel_select(guild, "post_panel_channel_id", "Post Panel Channel", profile.get("panel_channel_id"))}
-                    <div class="th-field"><label>Style</label><select name="post_panel_style">{
+                    <div class="th-row">
+                        {
+            self._channel_select(guild, "post_panel_channel_id", "Post Panel Channel", profile.get("panel_channel_id"))
+        }
+                        <div class="th-field"><label>Style</label><select name="post_panel_style" data-panel-style-select="1">{
             self._option("button", "Button", profile.get("panel_style"))
         }{self._option("dropdown", "Dropdown", profile.get("panel_style"))}{
             self._option("text", "Text commands", profile.get("panel_style"))
         }{self._option("reaction", "Emoji reactions", profile.get("panel_style"))}</select></div>
+                    </div>
+                    <h4>Embed Appearance</h4>
+                    <div class="th-row">
+                        {self._input("post_panel_title", "Embed Title", profile.get("panel_title") or "Need Help?")}
+                        {
+            self._input(
+                "post_panel_color",
+                "Embed Color (Hex)",
+                self._color_hex(profile.get("panel_color")) if profile.get("panel_color") is not None else "#5865F2",
+            )
+        }
+                        {self._input("post_panel_footer", "Footer Text", profile.get("panel_footer") or "TicketHub")}
+                    </div>
+                    {
+            self._textarea(
+                "post_panel_message",
+                "Embed Message / Description",
+                profile.get("panel_message") or "Open a ticket and staff will help you as soon as possible.",
+                rows=2,
+            )
+        }
+                    <div class="th-row">
+                        {
+            self._input(
+                "post_panel_thumbnail_url",
+                "Thumbnail URL (optional, defaults to server icon)",
+                profile.get("panel_thumbnail_url") or "",
+            )
+        }
+                        {self._input("post_panel_image_url", "Main Image URL (optional)", profile.get("panel_image_url") or "")}
+                        <label class="th-check"><input type="checkbox" name="post_panel_show_details" value="1" {
+            self._checked(profile.get("panel_show_details", True))
+        }> Include Profile & Max Open details</label>
+                    </div>
+                    <div data-panel-component="button">
+                        <h4>Button Appearance</h4>
+                        <div class="th-row">
+                            {
+            self._input("post_panel_button_label", "Button Label", profile.get("panel_button_label") or "Open Ticket")
+        }
+                            {
+            self._input(
+                "post_panel_button_emoji", "Button Emoji", profile.get("panel_button_emoji") or DEFAULT_PANEL_BUTTON_EMOJI
+            )
+        }
+                            <div class="th-field"><label>Button Style</label><select name="post_panel_button_style">{
+            self._option("primary", "Primary (Blurple)", profile.get("panel_button_style", "primary"))
+        }{self._option("secondary", "Secondary (Grey)", profile.get("panel_button_style"))}{
+            self._option("success", "Success (Green)", profile.get("panel_button_style"))
+        }{self._option("danger", "Danger (Red)", profile.get("panel_button_style"))}</select></div>
+                        </div>
+                    </div>
+                    <div data-panel-component="dropdown">
+                        <h4>Dropdown Appearance</h4>
+                        <div class="th-row">
+                            {
+            self._input(
+                "post_panel_dropdown_placeholder",
+                "Dropdown Placeholder",
+                profile.get("panel_dropdown_placeholder") or "Open a ticket...",
+            )
+        }
+                            {
+            self._input("post_panel_dropdown_label", "Option Label", profile.get("panel_dropdown_label") or "Open Ticket")
+        }
+                            {
+            self._input(
+                "post_panel_dropdown_emoji", "Option Emoji", profile.get("panel_dropdown_emoji") or DEFAULT_PANEL_BUTTON_EMOJI
+            )
+        }
+                            {
+            self._input(
+                "post_panel_dropdown_description",
+                "Option Description (optional)",
+                profile.get("panel_dropdown_description") or "",
+            )
+        }
+                        </div>
+                    </div>
                     <button class="th-btn" type="submit">Post Panel</button>
                 </form>
                 <form method="POST">
@@ -2092,8 +2493,8 @@ class DashboardIntegration:
                 {csrf}
                 <input type="hidden" name="action" value="save_multi_panel">
                 <div class="th-row">
-                    {self._input("multi_panel_channel_id", "Multi-Panel Channel ID", "")}
-                    {self._input("multi_panel_message_id", "Multi-Panel Message ID", "")}
+                    {self._channel_select(guild, "multi_panel_channel_id", "Multi-Panel Channel", None)}
+                    {self._input("multi_panel_message_id", "Message ID (leave empty to post new message)", "")}
                     <div class="th-field"><label>Style</label><select name="multi_panel_style">{
             self._option("button", "Button", "button")
         }{self._option("dropdown", "Dropdown", "button")}{self._option("text", "Text commands", "button")}{
@@ -2101,6 +2502,15 @@ class DashboardIntegration:
         }</select></div>
                     {self._input("multi_panel_placeholder", "Dropdown Placeholder", "Choose a ticket type...")}
                 </div>
+                <div class="th-row">
+                    {self._input("multi_panel_title", "Embed Title (when posting new)", "Need Help?")}
+                    {self._input("multi_panel_color", "Embed Color (Hex)", "#5865F2")}
+                </div>
+                {
+            self._textarea(
+                "multi_panel_message", "Embed Message (when posting new)", "Select an option below to open a ticket.", rows=2
+            )
+        }
                 {self._textarea("multi_panel_options", "Options: profile | emoji | label | description", "", rows=6)}
                 <button class="th-btn" type="submit">Save Multi-Panel</button>
             </form>
