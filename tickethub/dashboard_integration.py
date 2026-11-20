@@ -863,12 +863,12 @@ class DashboardIntegration:
             or "Open a ticket and staff will help you as soon as possible."
         )
         profile["panel_color"] = self._sanitize_panel_color(self._dash_value(form_data, "panel_color"))
-        profile["panel_footer"] = self._clean_modal_text(self._dash_value(form_data, "panel_footer"), 2048) or "TicketHub"
+        profile["panel_footer"] = self._clean_modal_text(self._dash_value(form_data, "panel_footer"), 2048)
         profile["panel_image_url"] = self._dash_value(form_data, "panel_image_url").strip() or None
         profile["panel_thumbnail_url"] = self._dash_value(form_data, "panel_thumbnail_url").strip() or None
         profile["panel_show_details"] = self._dash_bool(form_data, "panel_show_details")
         profile["panel_button_label"] = (
-            self._clean_modal_text(self._dash_value(form_data, "panel_button_label"), 80) or "Open Ticket"
+            self._clean_modal_text(self._dash_value(form_data, "panel_button_label"), 80)
         )
         profile["panel_button_emoji"] = self._dash_value(form_data, "panel_button_emoji").strip() or DEFAULT_PANEL_BUTTON_EMOJI
         profile["panel_button_style"] = self._parse_button_style(self._dash_value(form_data, "panel_button_style", "primary"))
@@ -878,7 +878,7 @@ class DashboardIntegration:
         profile["panel_dropdown_label"] = (
             self._clean_modal_text(self._dash_value(form_data, "panel_dropdown_label"), 100)
             or profile["panel_button_label"]
-            or "Open Ticket"
+           
         )
         profile["panel_dropdown_emoji"] = (
             self._dash_value(form_data, "panel_dropdown_emoji").strip()
@@ -1223,7 +1223,7 @@ class DashboardIntegration:
             profile["panel_color"] = self._sanitize_panel_color(self._dash_value(form_data, "post_panel_color"))
         if "post_panel_footer" in form_data:
             profile["panel_footer"] = (
-                self._clean_modal_text(self._dash_value(form_data, "post_panel_footer"), 2048) or "TicketHub"
+                self._clean_modal_text(self._dash_value(form_data, "post_panel_footer"), 2048)
             )
         if "post_panel_image_url" in form_data:
             profile["panel_image_url"] = self._dash_value(form_data, "post_panel_image_url").strip() or None
@@ -1233,7 +1233,7 @@ class DashboardIntegration:
             profile["panel_show_details"] = self._dash_bool(form_data, "post_panel_show_details")
         if "post_panel_button_label" in form_data:
             profile["panel_button_label"] = (
-                self._clean_modal_text(self._dash_value(form_data, "post_panel_button_label"), 80) or "Open Ticket"
+                self._clean_modal_text(self._dash_value(form_data, "post_panel_button_label"), 80)
             )
         if "post_panel_button_emoji" in form_data:
             profile["panel_button_emoji"] = (
@@ -1249,7 +1249,7 @@ class DashboardIntegration:
             )
         if "post_panel_dropdown_label" in form_data:
             profile["panel_dropdown_label"] = (
-                self._clean_modal_text(self._dash_value(form_data, "post_panel_dropdown_label"), 100) or "Open Ticket"
+                self._clean_modal_text(self._dash_value(form_data, "post_panel_dropdown_label"), 100)
             )
         if "post_panel_dropdown_emoji" in form_data:
             profile["panel_dropdown_emoji"] = (
@@ -2062,7 +2062,7 @@ class DashboardIntegration:
                 self._color_hex(profile.get("panel_color")) if profile.get("panel_color") is not None else "",
             )
         }
-                    {self._input("panel_footer", "Footer Text", profile.get("panel_footer") or "TicketHub")}
+                    {self._input("panel_footer", "Footer Text", profile.get("panel_footer"))}
                 </div>
                 <div class="th-row">
                     {
@@ -2078,7 +2078,7 @@ class DashboardIntegration:
         }> Show Profile & Max Open in Embed</label>
                 </div>
                 <div class="th-row">
-                    {self._input("panel_button_label", "Button Label", profile.get("panel_button_label") or "Open Ticket")}
+                    {self._input("panel_button_label", "Button Label", profile.get("panel_button_label"))}
                     {
             self._input("panel_button_emoji", "Button Emoji", profile.get("panel_button_emoji") or DEFAULT_PANEL_BUTTON_EMOJI)
         }
@@ -2097,7 +2097,7 @@ class DashboardIntegration:
             )
         }
                     {
-            self._input("panel_dropdown_label", "Dropdown Option Label", profile.get("panel_dropdown_label") or "Open Ticket")
+            self._input("panel_dropdown_label", "Dropdown Option Label", profile.get("panel_dropdown_label"))
         }
                     {
             self._input(
@@ -2393,13 +2393,13 @@ class DashboardIntegration:
                 self._color_hex(profile.get("panel_color")) if profile.get("panel_color") is not None else "#5865F2",
             )
         }
-                        {self._input("post_panel_footer", "Footer Text", profile.get("panel_footer") or "TicketHub")}
+                        {self._input("post_panel_footer", "Footer Text", profile.get("panel_footer"))}
                     </div>
                     {
             self._textarea(
                 "post_panel_message",
                 "Embed Message / Description",
-                profile.get("panel_message") or "Open a ticket and staff will help you as soon as possible.",
+                profile.get("panel_message"),
                 rows=2,
             )
         }
@@ -2420,7 +2420,7 @@ class DashboardIntegration:
                         <h4>Button Appearance</h4>
                         <div class="th-row">
                             {
-            self._input("post_panel_button_label", "Button Label", profile.get("panel_button_label") or "Open Ticket")
+            self._input("post_panel_button_label", "Button Label", profile.get("panel_button_label"))
         }
                             {
             self._input(
@@ -2445,7 +2445,7 @@ class DashboardIntegration:
             )
         }
                             {
-            self._input("post_panel_dropdown_label", "Option Label", profile.get("panel_dropdown_label") or "Open Ticket")
+            self._input("post_panel_dropdown_label", "Option Label", profile.get("panel_dropdown_label"))
         }
                             {
             self._input(
